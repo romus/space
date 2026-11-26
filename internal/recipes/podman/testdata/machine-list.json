@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "podman-machine-default",
+    "Default": true,
+    "Created": "2026-03-01T10:00:00Z",
+    "Running": true,
+    "Starting": false,
+    "LastUp": "2026-11-22T09:00:00Z",
+    "VMType": "applehv",
+    "CPUs": 4,
+    "Memory": "4294967296",
+    "DiskSize": "107374182400",
+    "Port": 51234,
+    "RemoteUsername": "core"
+  }
+]

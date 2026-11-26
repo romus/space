@@ -1,0 +1,5 @@
+[
+  {"Id": "aaa111aaa111000000000000000000000000000000000000000000000000000a", "Image": "localhost/api:dev", "ImageID": "7d61ae0f3b98dddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "Names": ["api-dev"], "State": "running", "Created": 1795000000, "Size": {"rootFsSize": 1200000000, "rwSize": 5000000}},
+  {"Id": "bbb222bbb222000000000000000000000000000000000000000000000000000b", "Image": "docker.io/library/postgres:16", "ImageID": "4c08f1e7a2d5eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Names": ["db-dev"], "State": "running", "Created": 1794000000, "Size": {"rootFsSize": 438000000, "rwSize": 90000000}},
+  {"Id": "ccc333ccc333000000000000000000000000000000000000000000000000000c", "Image": "docker.io/library/redis:7-alpine", "ImageID": "f2d9b3c61e04ffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "Names": ["old-cache"], "State": "exited", "Created": 1792000000, "Size": {"rootFsSize": 41000000, "rwSize": 2000000}}
+]

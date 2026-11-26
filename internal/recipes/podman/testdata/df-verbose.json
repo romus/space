@@ -1,0 +1,8 @@
+{
+  "Images": [],
+  "Containers": [],
+  "Volumes": [
+    {"VolumeName": "pgdata", "Links": 1, "Size": 800000000, "ReclaimableSize": 0},
+    {"VolumeName": "scratch", "Links": 0, "Size": 300000000, "ReclaimableSize": 300000000}
+  ]
+}

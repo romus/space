@@ -1,0 +1,5 @@
+[
+  {"Type": "Images", "Total": 6, "Active": 3, "RawSize": 6479000000, "RawReclaimable": 4800000000},
+  {"Type": "Containers", "Total": 3, "Active": 2, "RawSize": 97000000, "RawReclaimable": 2000000},
+  {"Type": "Local Volumes", "Total": 2, "Active": 1, "RawSize": 1100000000, "RawReclaimable": 300000000}
+]

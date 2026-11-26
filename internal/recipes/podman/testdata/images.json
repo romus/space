@@ -1,0 +1,8 @@
+[
+  {"Id": "3f9a1c07be52aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Names": ["localhost/indexer:build-2041"], "Size": 2300000000, "Created": 1787000000, "Containers": 0},
+  {"Id": "9e04d7aa1f30bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Names": null, "RepoTags": null, "Size": 1400000000, "Created": 1787000000, "Containers": 0, "Dangling": true},
+  {"Id": "c81f2e4d9a07cccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "Names": ["docker.io/library/node:20-bookworm"], "Size": 1100000000, "Created": 1782000000, "Containers": 0},
+  {"Id": "7d61ae0f3b98dddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "Names": ["localhost/api:dev"], "Size": 1200000000, "Created": 1795000000, "Containers": 1},
+  {"Id": "4c08f1e7a2d5eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Names": ["docker.io/library/postgres:16"], "Size": 438000000, "Created": 1794000000, "Containers": 1},
+  {"Id": "f2d9b3c61e04ffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "Names": ["docker.io/library/redis:7-alpine"], "Size": 41000000, "Created": 1792000000, "Containers": 1}
+]

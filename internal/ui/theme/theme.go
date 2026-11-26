@@ -72,6 +72,12 @@ type Theme struct {
 
 func hex(s string) color.Color { return lipgloss.Color(s) }
 
+// Hex writes a colour as #RRGGBB, the form a terminal takes.
+func Hex(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("#%02X%02X%02X", r>>8, g>>8, b>>8)
+}
+
 // DarkTheme is the dark set, taken from the dark artboards.
 func DarkTheme() *Theme {
 	return &Theme{

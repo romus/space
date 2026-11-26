@@ -1,7 +1,6 @@
 package theme
 
 import (
-	"fmt"
 	"image/color"
 	"math"
 	"reflect"
@@ -44,11 +43,6 @@ func TestFor(t *testing.T) {
 	}
 }
 
-func hexOf(c color.Color) string {
-	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("#%02X%02X%02X", r>>8, g>>8, b>>8)
-}
-
 // The values are the ones written in the artboards.
 func TestTokensMatchTheDesign(t *testing.T) {
 	d, l := DarkTheme(), LightTheme()
@@ -71,8 +65,8 @@ func TestTokensMatchTheDesign(t *testing.T) {
 		{"Danger", d.Danger, l.Danger, "#FF7A6E", "#C4352A"},
 	}
 	for _, c := range cases {
-		if hexOf(c.dark) != c.wantD || hexOf(c.light) != c.wantL {
-			t.Errorf("%s: dark %s (want %s), light %s (want %s)", c.name, hexOf(c.dark), c.wantD, hexOf(c.light), c.wantL)
+		if Hex(c.dark) != c.wantD || Hex(c.light) != c.wantL {
+			t.Errorf("%s: dark %s (want %s), light %s (want %s)", c.name, Hex(c.dark), c.wantD, Hex(c.light), c.wantL)
 		}
 	}
 }

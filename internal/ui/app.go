@@ -4,11 +4,13 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/romus/space/internal/config"
 	"github.com/romus/space/internal/engine"
@@ -80,10 +82,40 @@ func (a *App) applyTheme() {
 	a.c.Theme = th
 }
 
+// windowBg is the colour space paints the terminal's background with, or nil
+// when it leaves the terminal's own.
+func (a *App) windowBg() color.Color {
+	if a.noColor {
+		return nil
+	}
+	return a.c.Theme.Bg
+}
+
+// bgProbe asks the terminal for its own background. space paints that
+// background itself, so a plain request is answered with space's colour, not
+// the terminal's. The probe puts the terminal's colour back, asks, and paints
+// again, all in one write, so nothing shows on screen.
+//
+// Bubble Tea formats it at the moment of writing, on the goroutine that runs
+// Update, so the colour painted back is the one the window has right then.
+type bgProbe struct{ a *App }
+
+func (p bgProbe) String() string {
+	bg := p.a.windowBg()
+	if bg == nil {
+		return ansi.RequestBackgroundColor
+	}
+	return ansi.ResetBackgroundColor + ansi.RequestBackgroundColor + ansi.SetBackgroundColor(theme.Hex(bg))
+}
+
+// probeBackground asks what "system" means; the answer is a
+// tea.BackgroundColorMsg.
+func (a *App) probeBackground() tea.Cmd { return tea.Raw(bgProbe{a}) }
+
 func (a *App) top() screens.Screen { return a.stack[len(a.stack)-1] }
 
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, tick(), a.init)
+	return tea.Batch(tick(), a.init)
 }
 
 func (a *App) resize() {
@@ -133,12 +165,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.ColorProfileMsg:
 		a.noColor = msg.Profile <= colorprofile.ASCII
 		a.applyTheme()
+		// Bubble Tea sends this once at the start. It is the first moment
+		// space knows whether it paints the background, so the first probe
+		// goes out here and not from Init.
+		if a.c.Mode == theme.System {
+			return a, a.probeBackground()
+		}
 		return a, nil
 
 	case tea.FocusMsg:
 		// The terminal may have switched profile while we were away.
 		if a.c.Mode == theme.System {
-			return a, tea.RequestBackgroundColor
+			return a, a.probeBackground()
 		}
 		return a, nil
 
@@ -190,7 +228,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				next, cmd := top.Update(screens.ToastMsg{Text: "Theme: " + string(a.c.Mode)})
 				a.stack[len(a.stack)-1] = next
 				if a.c.Mode == theme.System {
-					cmd = tea.Batch(cmd, tea.RequestBackgroundColor)
+					cmd = tea.Batch(cmd, a.probeBackground())
 				}
 				return a, cmd
 			}
@@ -230,10 +268,10 @@ func (a *App) View() tea.View {
 	v.AltScreen = true
 	v.ReportFocus = true
 	v.WindowTitle = "space — " + a.top().Title()
-	if !a.noColor {
+	if bg := a.windowBg(); bg != nil {
 		// Ask the terminal to paint every cell, not only the ones we style.
 		// Bubble Tea restores the terminal's own colours on exit.
-		v.BackgroundColor = th.Bg
+		v.BackgroundColor = bg
 		v.ForegroundColor = th.Text
 	}
 	return v

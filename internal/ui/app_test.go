@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/romus/space/internal/config"
@@ -83,6 +86,8 @@ type harness struct {
 	// reverse runs the commands of a batch last to first. A batch promises
 	// no order, so the app must work either way.
 	reverse bool
+	// raw is every escape sequence the app wrote to the terminal directly.
+	raw []string
 }
 
 func newHarness(t *testing.T, mode theme.Mode) *harness {
@@ -111,6 +116,9 @@ func (h *harness) run(cmd tea.Cmd) {
 	}
 	switch msg := cmd().(type) {
 	case nil, tickMsg, tea.QuitMsg:
+	case tea.RawMsg:
+		// Bubble Tea formats the sequence when it writes it.
+		h.raw = append(h.raw, fmt.Sprint(msg.Msg))
 	case tea.BatchMsg:
 		if h.reverse {
 			for i := len(msg) - 1; i >= 0; i-- {
@@ -590,6 +598,61 @@ func TestThemeSwitching(t *testing.T) {
 	}
 	if got := config.LoadState(h.app.c.Paths).Theme; got != "dark" {
 		t.Fatalf("saved theme: got %q", got)
+	}
+
+	// Back to system, which t always reaches from dark. The window is painted
+	// by space, so the question must step around space's own colour.
+	h.raw = nil
+	h.key("t")
+	if h.app.c.Mode != theme.System {
+		t.Fatalf("after t t t: mode %s", h.app.c.Mode)
+	}
+	if len(h.raw) != 1 || h.raw[0] != probeOf(h.app.c.Theme.Bg) {
+		t.Fatalf("asking the terminal: wrote %q, want %q", h.raw, probeOf(h.app.c.Theme.Bg))
+	}
+}
+
+// probeOf is the one write that asks a terminal painted with bg for its own
+// background: its colour back, the question, then bg again.
+func probeOf(bg color.Color) string {
+	return ansi.ResetBackgroundColor + ansi.RequestBackgroundColor + ansi.SetBackgroundColor(theme.Hex(bg))
+}
+
+func TestSystemThemeAsksTheTerminalNotItself(t *testing.T) {
+	h := newHarness(t, theme.System)
+
+	// The first question goes out once the colour profile is known.
+	h.send(tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
+	if len(h.raw) != 1 || h.raw[0] != probeOf(h.app.c.Theme.Bg) {
+		t.Fatalf("at the start: wrote %q", h.raw)
+	}
+	if i, j := strings.Index(h.raw[0], ansi.ResetBackgroundColor), strings.Index(h.raw[0], ansi.RequestBackgroundColor); i < 0 || i > j {
+		t.Fatalf("the terminal's own colour must be back before the question: %q", h.raw[0])
+	}
+
+	// Coming back to the window asks again, and paints the current theme back.
+	h.send(tea.BackgroundColorMsg{Color: theme.DarkTheme().Bg})
+	h.raw = nil
+	h.send(tea.FocusMsg{})
+	if len(h.raw) != 1 || h.raw[0] != probeOf(theme.DarkTheme().Bg) {
+		t.Fatalf("on focus: wrote %q", h.raw)
+	}
+
+	// A terminal without colour is not painted, so there is nothing to step
+	// around and nothing to paint back.
+	h.raw = nil
+	h.send(tea.ColorProfileMsg{Profile: colorprofile.ASCII})
+	if len(h.raw) != 1 || h.raw[0] != ansi.RequestBackgroundColor {
+		t.Fatalf("without colour: wrote %q", h.raw)
+	}
+
+	// A fixed theme never asks.
+	h.key("t")
+	h.raw = nil
+	h.send(tea.FocusMsg{})
+	h.send(tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
+	if len(h.raw) != 0 {
+		t.Fatalf("a fixed theme asked the terminal: %q", h.raw)
 	}
 }
 

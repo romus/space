@@ -96,7 +96,9 @@ space plan --script > clean.sh  every plan, as a shell script
 `system` follows the background of your terminal, asked through the terminal
 itself; if the terminal does not answer, it follows the macOS appearance.
 `light` and `dark` are fixed. space always paints its own background, so a
-light theme stays readable in a dark terminal.
+light theme stays readable in a dark terminal. To ask, it puts the terminal's
+own background back for an instant, so the answer is the terminal's colour and
+not the one space painted.
 
 The theme is chosen by, in order: `--theme`, the `SPACE_THEME` variable,
 `theme` in `~/.config/space/config.toml`, the last choice made with `t`.

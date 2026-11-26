@@ -9,7 +9,11 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.dat
 PREFIX ?= $(HOME)/.local
 BINDIR := $(PREFIX)/bin
 
-.PHONY: build install uninstall test lint fmt fixture run clean
+# What space keeps for the user, at the same paths the program works out.
+CONFIG_DIR = $${XDG_CONFIG_HOME:-$$HOME/.config}/space
+STATE_DIR  = $${XDG_STATE_HOME:-$$HOME/.local/state}/space
+
+.PHONY: build install uninstall uninstall-all test lint fmt fixture run clean
 
 install: build ## install space into $(PREFIX)/bin
 	install -d "$(BINDIR)"
@@ -20,7 +24,14 @@ install: build ## install space into $(PREFIX)/bin
 uninstall: ## remove space from $(PREFIX)/bin; settings and logs are kept
 	rm -f "$(BINDIR)/space"
 	@echo "removed $(BINDIR)/space"
-	@echo "kept: ~/.config/space and ~/.local/state/space (delete them by hand if you want)"
+	@echo "kept: settings and logs. To remove them too: make uninstall-all"
+
+uninstall-all: ## remove space and everything it keeps: settings, state, logs
+	rm -f "$(BINDIR)/space"
+	rm -rf "$(CONFIG_DIR)" "$(STATE_DIR)"
+	@echo "removed $(BINDIR)/space"
+	@echo "removed $(CONFIG_DIR)"
+	@echo "removed $(STATE_DIR)"
 
 
 build: ## build ./space for this Mac

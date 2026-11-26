@@ -558,9 +558,6 @@ func (o *Overview) mark(it recipe.Item, cl classify.Class) bool {
 	case cl.Kind == recipe.Special:
 		o.toast.set("This belongs to a recipe — press r instead of removing it by hand")
 		return false
-	case cl.Kind == recipe.Personal:
-		o.toast.set("Personal data is view only")
-		return false
 	case cl.Protected:
 		o.toast.set("Too important to remove whole — open it and pick what to remove inside")
 		return false
@@ -590,6 +587,12 @@ func (o *Overview) marked() (n int, bytes int64) {
 func (o *Overview) plan(permanent bool) tea.Cmd {
 	if len(o.marks) == 0 {
 		o.toast.set("Nothing is marked — press space on a row first")
+		return nil
+	}
+	// Say so before the plan, not after it fails: started above the home
+	// folder, space only looks.
+	if _, err := engine.CheckRoot(o.c.Root, o.c.Home()); err != nil {
+		o.toast.set("Here space only looks. To remove things, start it inside your home folder")
 		return nil
 	}
 	items := make([]recipe.Item, 0, len(o.marks))

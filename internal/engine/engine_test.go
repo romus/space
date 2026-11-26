@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -227,11 +229,133 @@ func TestRemoveRefusesUnsafePaths(t *testing.T) {
 	}
 	for _, c := range cases {
 		res := e.Run(context.Background(), removePlan(c.root, false, c.paths...), nil)
-		if res.Err == nil {
+		// A root that is not allowed fails the step; a path that is not
+		// allowed is left behind and reported. Either way nothing goes.
+		if res.Err == nil && len(res.Failures()) == 0 {
 			t.Errorf("%s: should be refused", c.name)
 		}
 		if !exists(inside) || !exists(outside) {
 			t.Fatalf("%s: a file was removed", c.name)
+		}
+	}
+}
+
+// One path that cannot be removed does not hold back the others, and the
+// reason is given in plain words.
+func TestOneFailureDoesNotStopTheRest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes everything")
+	}
+	h := home(t)
+	first := filepath.Join(h, "docs/first.txt")
+	stuck := filepath.Join(h, "docs/locked/stuck.txt")
+	last := filepath.Join(h, "docs/last.txt")
+	cache := filepath.Join(h, "docs/cache")
+	for _, p := range []string{first, stuck, last, filepath.Join(cache, "blob")} {
+		touch(t, p)
+	}
+	// Nothing can be renamed out of, or deleted from, a read-only folder.
+	locked := filepath.Dir(stuck)
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0o755)
+
+	for _, toTrash := range []bool{true, false} {
+		touch(t, first)
+		touch(t, last)
+		touch(t, filepath.Join(cache, "blob"))
+		plan := recipe.Plan{Title: "Remove", Steps: []recipe.Step{
+			{Title: "files", Remove: &recipe.Remove{Paths: []string{first, stuck, last}, ToTrash: toTrash, Root: h}},
+			{Title: "caches", Remove: &recipe.Remove{Paths: []string{cache}, Root: h}},
+		}}
+		Prepare(&plan)
+		e := &Engine{Home: h, Volume: h, Trash: DirTrash{Dir: filepath.Join(h, ".Trash")},
+			LogPath: filepath.Join(h, "state/run.log")}
+		var lines []string
+		res := e.Run(context.Background(), plan, func(ev Event) {
+			if o, ok := ev.(StepOutput); ok {
+				lines = append(lines, o.Line)
+			}
+		})
+
+		if res.Err != nil || res.Failed != -1 {
+			t.Fatalf("toTrash=%v: a path that stays behind is not a failed step: %v", toTrash, res.Err)
+		}
+		if exists(first) || exists(last) {
+			t.Fatalf("toTrash=%v: the paths around the stuck one must still go", toTrash)
+		}
+		if !exists(stuck) {
+			t.Fatalf("toTrash=%v: the stuck file cannot have gone", toTrash)
+		}
+		if exists(cache) {
+			t.Fatalf("toTrash=%v: the next step must still run", toTrash)
+		}
+		fails := res.Failures()
+		if len(fails) != 1 || fails[0].Path != stuck {
+			t.Fatalf("toTrash=%v: failures: %+v", toTrash, fails)
+		}
+		if !strings.Contains(fails[0].Reason, "macOS did not allow it") || !strings.Contains(fails[0].Reason, "Full Disk Access") {
+			t.Fatalf("toTrash=%v: the reason should say what to do: %q", toTrash, fails[0].Reason)
+		}
+		if len(res.Steps[0].Failures) != 1 || len(res.Steps[1].Failures) != 0 || res.Steps[0].Bytes <= 0 {
+			t.Fatalf("toTrash=%v: step results: %+v", toTrash, res.Steps)
+		}
+		want := "could not remove ~/docs/locked/stuck.txt: macOS did not allow it"
+		found := false
+		for _, l := range lines {
+			found = found || strings.HasPrefix(l, want)
+		}
+		log, _ := os.ReadFile(e.LogPath)
+		if !found || !strings.Contains(string(log), want) {
+			t.Fatalf("toTrash=%v: the failure must be in the output and the log:\n%s", toTrash, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func TestEveryPathFailing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes everything")
+	}
+	h := home(t)
+	a, b := filepath.Join(h, "locked/a.txt"), filepath.Join(h, "locked/b.txt")
+	touch(t, a)
+	touch(t, b)
+	if err := os.Chmod(filepath.Dir(a), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Dir(a), 0o755)
+
+	e := &Engine{Home: h, Volume: h, Trash: DirTrash{Dir: filepath.Join(h, ".Trash")}}
+	res := e.Run(context.Background(), removePlan(h, true, a, b), nil)
+	if len(res.Failures()) != 2 || res.Trashed != 0 || res.Steps[0].Bytes != 0 {
+		t.Fatalf("both must be reported and nothing counted: %+v", res.Steps[0])
+	}
+	if !exists(a) || !exists(b) {
+		t.Fatal("nothing can have gone")
+	}
+}
+
+func TestExplain(t *testing.T) {
+	permission := "macOS did not allow it. Give your terminal Full Disk Access in " +
+		"System Settings › Privacy & Security, or remove it in Finder"
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{&fs.PathError{Op: "unlinkat", Path: "/x/y", Err: syscall.EPERM}, permission},
+		{&os.LinkError{Op: "rename", Old: "/x/y", New: "/t/y", Err: syscall.EACCES}, permission},
+		{&fs.PathError{Op: "unlinkat", Path: "/x/y", Err: syscall.EBUSY}, "in use by another program"},
+		{&fs.PathError{Op: "unlinkat", Path: "/x/y", Err: syscall.EROFS}, "the disk is read-only"},
+		{&fs.PathError{Op: "unlinkat", Path: "/x/y", Err: syscall.ENOTEMPTY}, "directory not empty"},
+		{ErrUnsafe, "refused: outside the allowed folder"},
+		{fmt.Errorf("%w: no root", ErrUnsafe), "refused: outside the allowed folder: no root"},
+		{ErrChanged, "refused: changed since the plan was made"},
+		{errors.New("could not move to the Trash: the volume has no Trash"), "could not move to the Trash: the volume has no Trash"},
+	}
+	for _, c := range cases {
+		if got := Explain(c.err); got != c.want {
+			t.Errorf("Explain(%v) = %q, want %q", c.err, got, c.want)
 		}
 	}
 }
@@ -248,8 +372,12 @@ func TestRemoveRefusesThroughASymlink(t *testing.T) {
 	}
 	e := &Engine{Home: h, Volume: h}
 	res := e.Run(context.Background(), removePlan(root, false, filepath.Join(root, "escape/key.txt")), nil)
-	if !errors.Is(res.Err, ErrUnsafe) || !exists(secret) {
-		t.Fatalf("a path reached through a symlink must be refused: %v", res.Err)
+	fails := res.Failures()
+	if len(fails) != 1 || !errors.Is(fails[0].Err, ErrUnsafe) || !exists(secret) {
+		t.Fatalf("a path reached through a symlink must be refused: %+v", fails)
+	}
+	if fails[0].Reason != "refused: outside the allowed folder" {
+		t.Fatalf("reason: %q", fails[0].Reason)
 	}
 	// The link itself may be removed; its target stays.
 	res = e.Run(context.Background(), removePlan(root, false, filepath.Join(root, "escape")), nil)
@@ -274,8 +402,12 @@ func TestRemoveRefusesAReplacedFile(t *testing.T) {
 	}
 	e := &Engine{Home: h, Volume: h}
 	res := e.Run(context.Background(), plan, nil)
-	if !errors.Is(res.Err, ErrChanged) || !exists(path) {
-		t.Fatalf("a file that changed since the plan must be refused: %v", res.Err)
+	fails := res.Failures()
+	if len(fails) != 1 || !errors.Is(fails[0].Err, ErrChanged) || !exists(path) {
+		t.Fatalf("a file that changed since the plan must be refused: %+v", fails)
+	}
+	if fails[0].Reason != "refused: changed since the plan was made" {
+		t.Fatalf("reason: %q", fails[0].Reason)
 	}
 }
 
@@ -344,5 +476,32 @@ rm -rf -- /Users/me/.npm
 	many := recipe.Step{Remove: &recipe.Remove{Paths: []string{"/a", "/b", "/c", "/d", "/e"}}}
 	if d := Display(many, ""); d != "rm -rf -- /a /b /c … +2 more" {
 		t.Fatalf("a long list is cut: %s", d)
+	}
+}
+
+// A step that will not end can be cut short: the run stops at once and is
+// reported as stopped by the user, not as broken.
+func TestCancelCutsARunningStepShort(t *testing.T) {
+	h := home(t)
+	e := &Engine{Home: h, Volume: h}
+	ctx, cancel := context.WithCancel(context.Background())
+	plan := recipe.Plan{Title: "Slow", Steps: []recipe.Step{
+		{Title: "wait", Cmd: []string{"sleep", "30"}},
+		{Title: "never", Cmd: []string{"true"}},
+	}}
+	start := time.Now()
+	res := e.Run(ctx, plan, func(ev Event) {
+		if _, ok := ev.(StepStarted); ok {
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				cancel()
+			}()
+		}
+	})
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("the step was not cut short")
+	}
+	if !res.Stopped || res.Failed != -1 || res.Steps[1].Ran {
+		t.Fatalf("want a stopped run with step two untouched: %+v", res)
 	}
 }

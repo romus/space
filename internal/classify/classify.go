@@ -15,7 +15,16 @@ type Class struct {
 	Hint      string // short label for the row: "npm cache"
 	How       string // the REMOVED VIA column: "Trash", "Podman recipe"
 	RecipeID  string // set when a recipe owns the path
-	Protected bool   // plain, but too important to remove as a whole
+	Protected bool   // too important to remove whole; what is inside is not
+}
+
+// Glyph is the mark shown next to a row: ○ for a folder that cannot be
+// removed whole, else the mark of its kind.
+func (c Class) Glyph() string {
+	if c.Protected {
+		return "○"
+	}
+	return c.Kind.Glyph()
 }
 
 // Markable reports whether the user may mark the path for removal.
@@ -79,39 +88,29 @@ var cacheNames = map[string]string{
 	"DerivedData":  "Xcode build cache",
 }
 
-// Folders with personal data: space shows them and never removes them.
-var personalRoots = []rule{
-	{"Documents", "personal"},
-	{"Desktop", "personal"},
-	{"Pictures", "Photos · view only"},
-	{"Music", "personal"},
-	{"Library/Mail", "Mail · view only"},
-	{"Library/Messages", "Messages · view only"},
-	{"Library/Mobile Documents", "iCloud Drive"},
-	{"Library/CloudStorage", "cloud storage"},
-	{"Library/Application Support/MobileSync/Backup", "iPhone backup · Finder"},
-	{"Library/Keychains", "keychains"},
-	{"Library/Photos", "Photos · view only"},
-}
-
-// Folders that are plain but must never be removed whole.
+// Folders that must never be removed whole. They are shown with ○: open
+// them and pick what to remove inside. Everything inside is fair game.
 var protectedRoots = []string{
 	"Library", "Applications", ".Trash", ".ssh", ".gnupg", ".config", ".local",
-	"Movies", "Downloads", "Public",
+	"Documents", "Desktop", "Pictures", "Music", "Movies", "Downloads", "Public",
 }
 
 // Opaque package extensions: measured, then shown as a single item.
 var bundleExt = map[string]string{
 	".photoslibrary":  "Photos library",
-	".imovielibrary":  "personal · bundle",
-	".fcpbundle":      "personal · bundle",
-	".tvlibrary":      "personal · bundle",
-	".musiclibrary":   "personal · bundle",
+	".imovielibrary":  "iMovie library",
+	".fcpbundle":      "Final Cut library",
+	".tvlibrary":      "TV library",
+	".musiclibrary":   "Music library",
 	".app":            "application",
 	".xcarchive":      "Xcode archive",
-	".logicx":         "personal · bundle",
-	".band":           "personal · bundle",
-	".photosboothlib": "personal · bundle",
+	".logicx":         "Logic project",
+	".band":           "GarageBand project",
+	".photosboothlib": "Photo Booth library",
+}
+
+func (c *Classifier) backups() string {
+	return filepath.Join(c.home, "Library/Application Support/MobileSync/Backup")
 }
 
 // Opaque reports directories the scanner should measure without descending
@@ -120,8 +119,7 @@ func (c *Classifier) Opaque(path, name string) bool {
 	if _, ok := bundleExt[strings.ToLower(filepath.Ext(name))]; ok {
 		return true
 	}
-	backups := filepath.Join(c.home, "Library/Application Support/MobileSync/Backup")
-	return filepath.Dir(path) == backups
+	return filepath.Dir(path) == c.backups()
 }
 
 func under(path, root string) bool {
@@ -144,22 +142,8 @@ func (c *Classifier) Path(path string) Class {
 		}
 	}
 
-	name := filepath.Base(path)
-	if label, ok := bundleExt[strings.ToLower(filepath.Ext(name))]; ok && label != "application" && label != "Xcode archive" {
-		return Class{Kind: recipe.Personal, Hint: label, How: label}
-	}
-
 	if under(path, c.home) {
 		rel, _ := filepath.Rel(c.home, path)
-		for _, r := range personalRoots {
-			if under(rel, filepath.FromSlash(r.rel)) {
-				hint := r.hint
-				if rel != filepath.FromSlash(r.rel) && !strings.Contains(hint, "·") {
-					hint = "personal"
-				}
-				return Class{Kind: recipe.Personal, Hint: hint, How: hint}
-			}
-		}
 		for _, r := range cacheRoots {
 			root := filepath.FromSlash(r.rel)
 			if rel == root {
@@ -187,6 +171,12 @@ func (c *Classifier) Path(path string) Class {
 	}
 
 	cl := Class{Kind: recipe.Plain, How: "Trash"}
+	// Packages and device backups are one item: say what the item is.
+	if label, ok := bundleExt[strings.ToLower(filepath.Ext(path))]; ok {
+		cl.Hint = label
+	} else if filepath.Dir(path) == c.backups() {
+		cl.Hint = "iPhone backup"
+	}
 	if path == c.home || path == "/" {
 		cl.Protected = true
 	}
@@ -210,8 +200,6 @@ func (c Class) Advice() string {
 	switch {
 	case c.Kind == recipe.Cache:
 		return "Safe to remove — it will be rebuilt when needed. Mark it with space, then press enter for the plan."
-	case c.Kind == recipe.Personal:
-		return "Personal data — view only. space never removes it; manage it in the app that owns it."
 	case c.Protected:
 		return "Too important to remove whole. Open it with → and pick what to remove inside."
 	}
@@ -225,8 +213,9 @@ func (c Class) Label() string {
 		return "cache"
 	case recipe.Special:
 		return "recipe"
-	case recipe.Personal:
-		return "personal"
+	}
+	if c.Protected {
+		return "protected folder"
 	}
 	return "files"
 }

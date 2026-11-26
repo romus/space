@@ -65,11 +65,58 @@ func (a *app) themeMode(flag string) (theme.Mode, error) {
 	return theme.System, nil
 }
 
+// resolveRoot picks the folder to open: the --path flag or the argument,
+// else the folder space was started in.
+//
+// Under SPACE_HOME the default is the sandbox itself, not the current
+// folder: a sandboxed run must never wander into real data on its own.
+func resolveRoot(arg, flag string, paths config.Paths) (string, error) {
+	if arg != "" && flag != "" {
+		return "", errors.New("the folder is given twice: use either a path or --path, not both")
+	}
+	dir := flag
+	if dir == "" {
+		dir = arg
+	}
+	switch {
+	case dir == "~":
+		dir = paths.Home
+	case strings.HasPrefix(dir, "~/"):
+		dir = filepath.Join(paths.Home, dir[2:])
+	case dir == "" && config.Sandboxed():
+		dir = paths.Home
+	case dir == "":
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("cannot tell which folder this is: %w", err)
+		}
+		dir = wd
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	st, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("%s does not exist", dir)
+	case err != nil:
+		return "", err
+	case !st.IsDir():
+		return "", fmt.Errorf("%s is not a folder", dir)
+	}
+	return dir, nil
+}
+
 // Execute runs the command line and returns the exit code.
 func Execute(build Build) int {
 	a := &app{info: build}
 	var (
 		themeFlag string
+		pathFlag  string
 		files     bool
 		recipes   bool
 	)
@@ -79,7 +126,10 @@ func Execute(build Build) int {
 		Long: "space shows folders and files by the room they take on disk, and removes them the right way:\n" +
 			"plain files go to the Trash, caches are deleted, and things that cannot simply be deleted —\n" +
 			"a Podman machine, Claude Code or Codex sessions — get a recipe with the right order of commands.\n\n" +
-			"Nothing runs without a plan, and the plan is exactly what will run.",
+			"Nothing runs without a plan, and the plan is exactly what will run.\n\n" +
+			"space opens the folder you start it in. Give a path to open another one:\n" +
+			"  space ~/Downloads\n" +
+			"  space --path ~/Downloads",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -92,21 +142,13 @@ func Execute(build Build) int {
 			if err != nil {
 				return err
 			}
-			dir := a.paths.Home
+			arg := ""
 			if len(args) == 1 {
-				dir = args[0]
+				arg = args[0]
 			}
-			dir, err = filepath.Abs(dir)
+			dir, err := resolveRoot(arg, pathFlag, a.paths)
 			if err != nil {
 				return err
-			}
-			if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-				dir = resolved
-			}
-			if st, err := os.Stat(dir); err != nil {
-				return err
-			} else if !st.IsDir() {
-				return fmt.Errorf("%s is not a folder", dir)
 			}
 			if !term.IsTerminal(os.Stdout.Fd()) || !term.IsTerminal(os.Stdin.Fd()) {
 				return errors.New("space needs a terminal. Without one, try: space plan --script")
@@ -123,6 +165,7 @@ func Execute(build Build) int {
 	}
 	root.SetVersionTemplate("space {{.Version}}\n")
 	root.Flags().StringVar(&themeFlag, "theme", "", "colour theme: system, light or dark")
+	root.Flags().StringVarP(&pathFlag, "path", "p", "", "folder to open (default: the current folder)")
 	root.Flags().BoolVar(&files, "files", false, "open on the Files tab")
 	root.Flags().BoolVar(&recipes, "recipes", false, "open on the Recipes tab")
 	root.AddCommand(a.recipeCmd(), a.planCmd(), a.versionCmd())
@@ -328,9 +371,23 @@ func (a *app) run(ctx context.Context, out io.Writer, r recipe.Recipe, plan reci
 	if res.Trashed > 0 {
 		fmt.Fprintf(out, "%s moved to the Trash: space comes back when you empty it.\n", humanize.Bytes(res.Trashed))
 	}
+	failures := res.Failures()
+	if n := len(failures); n > 0 {
+		noun := "items"
+		if n == 1 {
+			noun = "item"
+		}
+		fmt.Fprintf(out, "%d %s could not be removed:\n", n, noun)
+		for _, f := range failures {
+			fmt.Fprintf(out, "  %s — %s\n", humanize.Tilde(f.Path, a.paths.Home), f.Reason)
+		}
+	}
 	fmt.Fprintf(out, "Log: %s\n", humanize.Tilde(res.LogPath, a.paths.Home))
 	if res.Failed >= 0 {
 		return fmt.Errorf("step %d failed: %w", res.Failed+1, res.Err)
+	}
+	if len(failures) > 0 {
+		return errors.New("some items could not be removed")
 	}
 	return nil
 }

@@ -172,10 +172,16 @@ func TestRunScreen(t *testing.T) {
 		"machine disk on Mac", "38.1 GB", "33.9 GB", "and shrinking",
 		"l full log", "ctrl+c stop after this step", "log: ~/.local/state/space/2026-11-22.log")
 
+	cut := false
+	r.cancel = func() { cut = true }
 	next, _ := r.Interrupt()
-	wantAll(t, text(t, next, c), "stopping after this step…")
-	if !r.eng.Stopping() {
-		t.Fatal("ctrl+c must reach the engine")
+	wantAll(t, text(t, next, c), "stopping after this step… again to cut it short")
+	if !r.eng.Stopping() || cut {
+		t.Fatal("the first ctrl+c asks the engine to stop after the step, and cuts nothing")
+	}
+	r.Interrupt()
+	if !cut {
+		t.Fatal("the second ctrl+c cuts the running step short")
 	}
 }
 
@@ -237,4 +243,104 @@ func TestScreensSurviveNarrowWindows(t *testing.T) {
 		plan.c = c2
 		text(t, plan, c2)
 	}
+}
+
+func TestDoneScreenListsWhatStayedBehind(t *testing.T) {
+	c := testCtx(theme.DarkTheme())
+	c.Root = t.TempDir()
+	home := c.Home()
+	permission := engine.Explain(&os.PathError{Op: "unlinkat", Path: "/x", Err: os.ErrPermission})
+	plan := recipe.Plan{Title: "Remove", Steps: []recipe.Step{{Title: "Move 4 items to the Trash"}}}
+	spec := PlanSpec{Plan: plan, Crumbs: []string{"~"}}
+
+	// Some went, some stayed: two for one reason, one for another.
+	partial := engine.Result{
+		Plan: plan, Failed: -1, FreeBefore: 82e9, FreeAfter: 82e9, Trashed: 3e9,
+		Steps: []engine.StepResult{{Ran: true, Bytes: 3e9, Failures: []engine.Failure{
+			{Path: home + "/Library/Mail/V10/big.mbox", Reason: permission},
+			{Path: home + "/Library/Messages/chat.db", Reason: permission},
+			{Path: home + "/Movies/open.mov", Reason: "in use by another program"},
+		}}},
+	}
+	s := text(t, NewDone(c, spec, partial), c)
+	wantAll(t, s, "✓", "Moved 3.0 GB to the Trash", "3 items could not be removed",
+		"~/Library/Mail/V10/big.mbox", "~/Library/Messages/chat.db",
+		"macOS did not allow it. Give your terminal Full Disk Access", "or remove it in Finder",
+		"~/Movies/open.mov — in use by another program", "e empty Trash")
+	if strings.Count(s, "macOS did not allow it") != 1 {
+		t.Fatalf("one explanation for the items that share it:\n%s", s)
+	}
+
+	// Nothing went at all.
+	none := engine.Result{
+		Plan: plan, Failed: -1, FreeBefore: 82e9, FreeAfter: 82e9,
+		Steps: []engine.StepResult{{Ran: true, Failures: []engine.Failure{
+			{Path: home + "/Movies/open.mov", Reason: "in use by another program"},
+		}}},
+	}
+	s = text(t, NewDone(c, spec, none), c)
+	wantAll(t, s, "✗", "Nothing was removed", "1 item could not be removed",
+		"~/Movies/open.mov — in use by another program")
+	if strings.Contains(s, "empty Trash") {
+		t.Fatal("there is nothing in the Trash to empty")
+	}
+
+	// A long list is cut, with a pointer to the log.
+	var many []engine.Failure
+	for i := 0; i < 8; i++ {
+		many = append(many, engine.Failure{Path: home + "/x/" + string(rune('a'+i)), Reason: "in use by another program"})
+	}
+	long := engine.Result{Plan: plan, Failed: -1, Steps: []engine.StepResult{{Ran: true, Failures: many}}}
+	s = text(t, NewDone(c, spec, long), c)
+	wantAll(t, s, "8 items could not be removed", "~/x/e", "+3 more — press l for the log")
+	if strings.Contains(s, "~/x/f") {
+		t.Fatal("only the first five are listed")
+	}
+}
+
+func TestRunScreenMarksAStepThatLeftThingsBehind(t *testing.T) {
+	c := testCtx(theme.DarkTheme())
+	plan := recipe.Plan{Title: "Remove", Steps: []recipe.Step{
+		{Title: "Move 3 items to the Trash", Remove: &recipe.Remove{Paths: []string{"/a"}, ToTrash: true}},
+		{Title: "Delete 1 cache", Remove: &recipe.Remove{Paths: []string{"/b"}}},
+	}}
+	r := &Run{
+		c: c, spec: PlanSpec{Plan: plan}, eng: c.NewEngine(nil),
+		status:  []int{stepDone, stepRun},
+		results: []engine.StepResult{{Ran: true, Bytes: 1e9, Failures: make([]engine.Failure, 2)}, {}},
+		cur:     1, start: time.Now(),
+	}
+	wantAll(t, text(t, r, c), "!  Move 3 items to the Trash", "2 failed")
+}
+
+// The run screen reads engine events itself, once it is placed: the command
+// that opens it must not read them too.
+func TestRunScreenStartsReadingOnlyWhenPlaced(t *testing.T) {
+	c := testCtx(theme.DarkTheme())
+	c.Root = t.TempDir()
+	c.Paths.StateDir = t.TempDir()
+	plan := recipe.Plan{Title: "Quick", Steps: []recipe.Step{{Title: "nothing", Cmd: []string{"true"}}}}
+	msg := runCmd(c, PlanSpec{Plan: plan})()
+	rep, ok := msg.(ReplaceMsg)
+	if !ok {
+		t.Fatalf("opening the run screen yields %T, want only a ReplaceMsg", msg)
+	}
+	starter, ok := rep.Screen.(Starter)
+	if !ok {
+		t.Fatal("the run screen must start its own reading")
+	}
+	// Reading from Start, the screen sees the run through to the end.
+	var s Screen = rep.Screen
+	cmd := starter.Start()
+	for i := 0; i < 20 && cmd != nil; i++ {
+		m := cmd()
+		if r, ok := m.(ReplaceMsg); ok {
+			if _, done := r.Screen.(*Done); !done {
+				t.Fatalf("the run should end on the done screen, got %T", r.Screen)
+			}
+			return
+		}
+		s, cmd = s.Update(m)
+	}
+	t.Fatal("the run never reached the done screen")
 }

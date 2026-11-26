@@ -5,8 +5,9 @@
 #   hack/mkfixture.sh /tmp/space-home
 #   SPACE_HOME=/tmp/space-home space
 #
-# SPACE_HOME makes space treat the folder as the home directory: it scans
-# it, looks for ~/.claude and ~/.codex inside it, and uses its own .Trash.
+# SPACE_HOME makes space treat the folder as the home directory: it opens it
+# instead of the current folder, looks for ~/.claude and ~/.codex inside it,
+# and uses its own .Trash.
 set -eu
 
 home="${1:?usage: mkfixture.sh <directory>}"

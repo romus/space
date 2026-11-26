@@ -44,6 +44,7 @@ type Run struct {
 	metricBefore int64
 	metricNow    int64
 	stopping     bool
+	cancel       context.CancelFunc
 	ticks        int
 }
 
@@ -69,13 +70,22 @@ func runCmd(c *Ctx, spec PlanSpec) tea.Cmd {
 		r.events <- engine.NeedTerminal{Cmd: cmd, Done: done}
 		return <-done
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
 	go func() {
-		res := r.eng.Run(context.Background(), spec.Plan, func(ev engine.Event) { r.events <- ev })
+		res := r.eng.Run(ctx, spec.Plan, func(ev engine.Event) { r.events <- ev })
 		r.events <- res
 		close(r.events)
 	}()
-	return tea.Batch(replace(r), r.wait())
+	// Only the screen itself reads the events, and only once it is on the
+	// stack (see Start). Reading here as well would race with the switch of
+	// screens: a fast step could report to a screen that is not there yet,
+	// and the run would look stuck with the work already done.
+	return replace(r)
 }
+
+// Start begins reading what the engine reports.
+func (r *Run) Start() tea.Cmd { return r.wait() }
 
 func (r *Run) wait() tea.Cmd {
 	return func() tea.Msg {
@@ -91,8 +101,12 @@ func (r *Run) Title() string { return strings.ToLower(r.spec.Plan.Title) + " —
 func (r *Run) Typing() bool  { return false }
 
 // Interrupt turns ctrl+c into "stop after this step": nothing is cut off
-// halfway.
+// halfway. A second ctrl+c is for a step that will not end: it stops the
+// running command at once.
 func (r *Run) Interrupt() (Screen, tea.Cmd) {
+	if r.stopping && r.cancel != nil {
+		r.cancel()
+	}
 	r.stopping = true
 	r.eng.StopAfterStep()
 	return r, nil
@@ -187,6 +201,10 @@ func (r *Run) Lines() []string {
 			if b := r.results[i].Bytes; b > 0 {
 				res = humanize.Bytes(b) + " · " + res
 			}
+			if n := len(r.results[i].Failures); n > 0 {
+				glyph, gc = "!", t.Danger
+				res = fmt.Sprintf("%d failed", n)
+			}
 		case stepFailed:
 			glyph, gc, nc = "✗", t.Danger, t.Strong
 			res = "failed"
@@ -235,7 +253,7 @@ func (r *Run) Lines() []string {
 	}
 	stop := "stop after this step"
 	if r.stopping {
-		stop = "stopping after this step…"
+		stop = "stopping after this step… again to cut it short"
 	}
 	bottom = append(bottom, kit.Blank(t, w), kit.Footer(t, w,
 		[]kit.Hint{{"l", "full log"}, {"ctrl+c", stop}},

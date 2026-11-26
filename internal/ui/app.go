@@ -98,6 +98,14 @@ func (a *App) marginTop() int {
 	return 0
 }
 
+// start begins the work of a screen that has just been placed.
+func start(s screens.Screen) tea.Cmd {
+	if st, ok := s.(screens.Starter); ok {
+		return st.Start()
+	}
+	return nil
+}
+
 // broadcast sends a message to every screen on the stack.
 func (a *App) broadcast(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
@@ -140,7 +148,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case screens.PushMsg:
 		a.stack = append(a.stack, msg.Screen)
-		return a, nil
+		return a, start(msg.Screen)
 
 	case screens.PopMsg:
 		if len(a.stack) > 1 {
@@ -153,7 +161,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(a.stack) == 1 {
 			a.stack = []screens.Screen{a.overview, msg.Screen}
 		}
-		return a, nil
+		return a, start(msg.Screen)
 
 	case screens.HomeMsg:
 		a.stack = []screens.Screen{a.overview}

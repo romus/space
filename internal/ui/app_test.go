@@ -49,6 +49,8 @@ func sandbox(t *testing.T) config.Paths {
 	write(t, home, "Documents/thesis.docx", 3*mb, 2)
 	write(t, home, ".npm/_cacache/blob", 5*mb, 30)
 	write(t, home, "Projects/web/node_modules/lib/index.js", 2*mb, 5)
+	write(t, home, "Projects/data/stuck.bin", 3*mb, 10)
+	write(t, home, "Projects/free.bin", 2*mb, 10)
 
 	session := func(project, cwd, id string, size, days int) {
 		rel := filepath.Join(".claude/projects", project, id+".jsonl")
@@ -78,11 +80,19 @@ func sandbox(t *testing.T) config.Paths {
 type harness struct {
 	t   *testing.T
 	app *App
+	// reverse runs the commands of a batch last to first. A batch promises
+	// no order, so the app must work either way.
+	reverse bool
 }
 
 func newHarness(t *testing.T, mode theme.Mode) *harness {
+	return newHarnessAt(t, mode, func(home string) string { return home })
+}
+
+// newHarnessAt opens the app on a folder chosen relative to the sandbox home.
+func newHarnessAt(t *testing.T, mode theme.Mode, root func(home string) string) *harness {
 	paths := sandbox(t)
-	app := New(Options{Root: paths.Home, Mode: mode, Paths: paths, State: config.LoadState(paths)})
+	app := New(Options{Root: root(paths.Home), Mode: mode, Paths: paths, State: config.LoadState(paths)})
 	h := &harness{t: t, app: app}
 	h.run(app.init)
 	h.send(tea.WindowSizeMsg{Width: 122, Height: 30})
@@ -102,6 +112,12 @@ func (h *harness) run(cmd tea.Cmd) {
 	switch msg := cmd().(type) {
 	case nil, tickMsg, tea.QuitMsg:
 	case tea.BatchMsg:
+		if h.reverse {
+			for i := len(msg) - 1; i >= 0; i-- {
+				h.run(msg[i])
+			}
+			return
+		}
 		for _, c := range msg {
 			h.run(c)
 		}
@@ -193,6 +209,22 @@ func (h *harness) cursorTo(name string) {
 	h.t.Fatalf("no row %q:\n%s", name, h.screen())
 }
 
+// cursorToName moves the cursor to a row by its name, wherever the folder
+// is: the detail panel ends the path of the current row with two spaces.
+func (h *harness) cursorToName(name string) {
+	h.t.Helper()
+	h.key("g")
+	for i := 0; i < 40; i++ {
+		for _, line := range strings.Split(h.screen(), "\n") {
+			if strings.Contains(line, "/"+name+"  ") {
+				return
+			}
+		}
+		h.key("down")
+	}
+	h.t.Fatalf("no row %q:\n%s", name, h.screen())
+}
+
 func TestEveryLineFillsTheWindow(t *testing.T) {
 	h := newHarness(t, theme.Dark)
 	check := func(where string) {
@@ -226,7 +258,7 @@ func TestOverviewShowsFoldersBySize(t *testing.T) {
 	h := newHarness(t, theme.Dark)
 	h.want("space", "Folders", "Files", "Recipes 1", "by size on disk", "free of")
 	h.want("Movies/", "Downloads/", "Documents/", ".npm/", ".claude/")
-	h.want("npm cache", "personal", "Claude Code")
+	h.want("npm cache", "Claude Code")
 	t.Log("\n" + h.screen())
 
 	s := h.screen()
@@ -283,17 +315,116 @@ func TestMarkPlanRunMovesToTrash(t *testing.T) {
 	h.want("Folders", "by size on disk")
 }
 
-func TestPersonalAndRecipeRowsCannotBeMarked(t *testing.T) {
+// ○ marks a folder that cannot be removed whole. What is inside it is
+// ordinary: it can be marked and removed like anything else.
+func TestProtectedFoldersKeepTheCircleButNotTheirContents(t *testing.T) {
 	h := newHarness(t, theme.Dark)
+	home := h.app.c.Paths.Home
+
+	row := func(name string) string {
+		t.Helper()
+		for _, line := range strings.Split(h.screen(), "\n") {
+			if strings.Contains(line, " "+name+"/ ") && strings.Contains(line, "%") {
+				return line
+			}
+		}
+		t.Fatalf("no row %q:\n%s", name, h.screen())
+		return ""
+	}
+	for _, name := range []string{"Documents", "Downloads", "Movies"} {
+		if !strings.Contains(row(name), "○ "+name+"/") {
+			t.Errorf("%s is protected and should carry ○: %q", name, row(name))
+		}
+	}
+	if !strings.Contains(row(".npm"), "● .npm/") || !strings.Contains(row(".claude"), "◆ .claude/") {
+		t.Errorf("cache and recipe marks: %q / %q", row(".npm"), row(".claude"))
+	}
+	if strings.ContainsAny(row("Projects"), "○●◆") {
+		t.Errorf("a plain folder has no mark: %q", row("Projects"))
+	}
+	h.wantNot("personal")
+
+	// The folder itself cannot be marked.
 	h.cursorTo("Documents")
 	h.key("space")
-	h.want("Personal data is view only")
+	h.want("Too important to remove whole — open it and pick what to remove inside")
 	h.wantNot("1 marked")
 
+	// Inside, nothing carries the circle and everything can go.
+	h.key("right")
+	h.want("thesis.docx")
+	h.wantNot("○", "personal", "view only")
+	h.key("space")
+	h.want("1 marked")
+	h.key("enter")
+	h.want("Move 1 item to the Trash", "$ trash ~/Documents/thesis.docx")
+	h.key("enter")
+	h.want("Moved", "to the Trash")
+	if _, err := os.Stat(filepath.Join(home, "Documents/thesis.docx")); !os.IsNotExist(err) {
+		t.Fatal("the document should be gone from Documents")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".Trash/thesis.docx")); err != nil {
+		t.Fatal("the document should be in the sandbox Trash:", err)
+	}
+}
+
+func TestRecipeRowsCannotBeMarked(t *testing.T) {
+	h := newHarness(t, theme.Dark)
 	h.cursorTo(".claude")
 	h.key("space")
 	h.want("belongs to a recipe")
 	h.wantNot("1 marked")
+}
+
+// What cannot be removed is not blocked up front: space tries, removes the
+// rest, and says which item stayed and why.
+func TestWhatCouldNotBeRemovedIsListedWithTheReason(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes everything")
+	}
+	h := newHarness(t, theme.Dark)
+	home := h.app.c.Paths.Home
+	locked := filepath.Join(home, "Projects/data")
+	// Nothing can be moved out of a read-only folder.
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	h.cursorTo("Projects")
+	h.key("right")
+	h.cursorToName("data")
+	h.key("right")
+	h.want("stuck.bin")
+	h.key("space", "left")
+	h.cursorToName("free.bin")
+	h.key("space")
+	h.want("2 marked")
+	h.key("enter")
+	h.want("Move 2 items to the Trash")
+	h.key("enter")
+
+	h.want("1 item could not be removed", "~/Projects/data/stuck.bin",
+		"macOS did not allow it. Give your terminal Full Disk Access", "or remove it in Finder")
+	h.wantNot("…")                  // the reason is wrapped, never cut
+	h.want("Moved", "to the Trash") // the other one did go
+	h.wantNot("Nothing was removed")
+	t.Log("\n" + h.screen())
+
+	if _, err := os.Stat(filepath.Join(locked, "stuck.bin")); err != nil {
+		t.Fatal("the stuck file cannot have gone:", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".Trash/free.bin")); err != nil {
+		t.Fatal("the free file should be in the Trash:", err)
+	}
+	logs, _ := filepath.Glob(filepath.Join(h.app.c.Paths.StateDir, "*.log"))
+	if len(logs) != 1 {
+		t.Fatalf("want one log, got %v", logs)
+	}
+	log, _ := os.ReadFile(logs[0])
+	if !strings.Contains(string(log), "could not remove ~/Projects/data/stuck.bin: macOS did not allow it") {
+		t.Fatalf("the log should say what stayed and why:\n%s", log)
+	}
 }
 
 func TestPermanentDeleteAsksTwice(t *testing.T) {
@@ -396,4 +527,65 @@ func TestTooSmallWindow(t *testing.T) {
 	h := newHarness(t, theme.Dark)
 	h.send(tea.WindowSizeMsg{Width: 60, Height: 12})
 	h.want("at least 80 × 20")
+}
+
+func TestStartedInASubfolderShowsOnlyThatFolder(t *testing.T) {
+	h := newHarnessAt(t, theme.Dark, func(home string) string { return filepath.Join(home, "Downloads") })
+	h.want("space  ~/Downloads/", "installer.dmg", "small.txt")
+	h.wantNot("Movies/", "Documents/", ".npm/", ".claude/")
+
+	// The folder it was started in is the top: left goes nowhere.
+	h.key("left", "left")
+	h.want("space  ~/Downloads/", "installer.dmg")
+	h.wantNot("Movies/")
+
+	// Recipes belong to the Mac, not to the folder.
+	h.want("Recipes 1")
+
+	// Removing works here as anywhere inside the home folder.
+	h.key("space", "enter")
+	h.want("Here’s what will happen", "Move 1 item to the Trash")
+}
+
+func TestAboveTheHomeFolderSpaceOnlyLooks(t *testing.T) {
+	h := newHarnessAt(t, theme.Dark, filepath.Dir)
+	home := h.app.c.Paths.Home
+	h.want(filepath.Base(home) + "/")
+
+	h.key("right") // into the home folder
+	h.want("Movies/")
+	h.cursorToName("Movies")
+	h.key("right", "space")
+	h.want("1 marked")
+	h.key("enter")
+	h.want("Here space only looks")
+	h.wantNot("Here’s what will happen")
+	if len(h.app.stack) != 1 {
+		t.Fatal("the plan screen must not open")
+	}
+	if _, err := os.Stat(filepath.Join(home, "Movies/recording.mov")); err != nil {
+		t.Fatal("nothing may be removed:", err)
+	}
+}
+
+// A fast step can report before the run screen is on the stack. The run
+// must still reach the done screen: it used to stay on "Running" for ever,
+// with the work already finished.
+func TestRunFinishesWhateverOrderTheMessagesArrive(t *testing.T) {
+	h := newHarness(t, theme.Dark)
+	home := h.app.c.Paths.Home
+	h.reverse = true
+
+	h.cursorTo("Movies")
+	h.key("right", "space", "enter")
+	h.want("Move 1 item to the Trash")
+	h.key("enter")
+	for i := 0; i < 20; i++ { // let the screen catch up
+		h.run(h.app.broadcast(screens.TickMsg{}))
+	}
+	h.want("Moved", "to the Trash", "back to overview")
+	h.wantNot("Running")
+	if _, err := os.Stat(filepath.Join(home, ".Trash/recording.mov")); err != nil {
+		t.Fatal("the file should be in the Trash:", err)
+	}
 }

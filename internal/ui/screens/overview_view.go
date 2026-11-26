@@ -24,10 +24,16 @@ func kindColor(c *Ctx, k recipe.Kind) color.Color {
 		return t.Safe
 	case recipe.Special:
 		return t.Recipe
-	case recipe.Personal:
-		return t.Muted
 	}
 	return t.Text
+}
+
+// glyphColor is the colour of the mark in front of a row.
+func glyphColor(c *Ctx, cl classify.Class) color.Color {
+	if cl.Protected {
+		return c.Theme.Muted
+	}
+	return kindColor(c, cl.Kind)
 }
 
 func (o *Overview) Lines() []string {
@@ -41,8 +47,18 @@ func (o *Overview) Lines() []string {
 		return kit.Frame(t, w, c.H, top, []string{kit.Footer(t, w, []kit.Hint{{"q", "quit"}}, nil, "", "")})
 	}
 
-	crumb := []kit.Span{kit.Sp(t.S(t.Muted), strings.TrimSuffix(c.Tilde(o.cwdPath()), "/")+"/")}
-	top := []string{header(c, crumb, diskGauge(c, o.vol)), kit.Blank(t, w)}
+	// A long path keeps its end: that is the folder you are looking at.
+	gauge := diskGauge(c, o.vol)
+	room := w - len("space  ") - 2
+	for _, s := range gauge {
+		room -= kit.Width(s.Text)
+	}
+	path := strings.TrimSuffix(c.Tilde(o.cwdPath()), "/") + "/"
+	if kit.Width(path) > room {
+		path = strings.TrimRight(kit.FitLeft(path, max(8, room)), " ")
+	}
+	crumb := []kit.Span{kit.Sp(t.S(t.Muted), path)}
+	top := []string{header(c, crumb, gauge), kit.Blank(t, w)}
 
 	badge := ""
 	if n := len(o.visibleRecipes()); n > 0 {
@@ -181,10 +197,7 @@ func (o *Overview) foldersView() (body, bottom []string) {
 			return t.S(fg)
 		}
 		name, bar := t.Text, t.Bar
-		switch {
-		case r.class.Kind == recipe.Personal:
-			name, bar = t.Muted, t.BarDim
-		case cur:
+		if cur {
 			name, bar = t.Strong, t.BarCur
 		}
 		kc := kindColor(c, r.class.Kind)
@@ -205,7 +218,7 @@ func (o *Overview) foldersView() (body, bottom []string) {
 		}
 		spans := []kit.Span{
 			kit.Cell(st(t.Strong), mark, 2),
-			kit.Cell(st(kc), r.class.Kind.Glyph(), 2),
+			kit.Cell(st(glyphColor(c, r.class)), r.class.Glyph(), 2),
 			kit.Cell(st(name), label, nameW),
 			kit.Cell(st(bar), kit.Bar(frac, barW), barW+2),
 			kit.CellR(st(name), humanize.Bytes(r.size), 11),
@@ -231,7 +244,7 @@ func (o *Overview) foldersView() (body, bottom []string) {
 	bottom = append(bottom, kit.Rule(t, w))
 	if o.cur < len(o.rows) {
 		r := o.rows[o.cur]
-		glyph := r.class.Kind.Glyph()
+		glyph := r.class.Glyph()
 		if glyph == "" {
 			glyph = "·"
 		}
@@ -252,7 +265,7 @@ func (o *Overview) foldersView() (body, bottom []string) {
 		}
 		bottom = append(bottom,
 			kit.Row(w, t.Base(), []kit.Span{
-				kit.Cell(t.S(kindColor(c, r.class.Kind)), glyph, 3),
+				kit.Cell(t.S(glyphColor(c, r.class)), glyph, 3),
 				kit.Sp(t.S(t.Strong), c.Tilde(r.path)),
 				kit.Sp(t.S(t.Muted), "  "+desc),
 			}, nil),
@@ -311,10 +324,7 @@ func (o *Overview) filesView() (body, bottom []string) {
 			return t.S(fg)
 		}
 		name := t.Text
-		switch {
-		case cl.Kind == recipe.Personal:
-			name = t.Muted
-		case cur:
+		if cur {
 			name = t.Strong
 		}
 		kc := kindColor(c, cl.Kind)
@@ -328,7 +338,7 @@ func (o *Overview) filesView() (body, bottom []string) {
 		}
 		first := []kit.Span{
 			kit.Cell(st(t.Strong), mark, 2),
-			kit.Cell(st(kc), cl.Kind.Glyph(), 2),
+			kit.Cell(st(glyphColor(c, cl)), cl.Glyph(), 2),
 			kit.Cell(st(name), label, fileW),
 			kit.CellR(st(name), humanize.Bytes(f.Size), 11),
 			kit.CellR(st(t.Muted), humanize.Ago(f.Atime, now), 15),
@@ -366,7 +376,7 @@ func (o *Overview) filesView() (body, bottom []string) {
 				kit.Sp(t.S(t.Text), "on disk"), kit.Sp(muted, "."),
 			}, nil))
 		default:
-			glyph := cl.Kind.Glyph()
+			glyph := cl.Glyph()
 			if glyph == "" {
 				glyph = "·"
 			}
@@ -375,7 +385,7 @@ func (o *Overview) filesView() (body, bottom []string) {
 				advice = rs.R.Info().Advice
 			}
 			bottom = append(bottom, kit.Row(w, t.Base(), []kit.Span{
-				kit.Cell(t.S(kindColor(c, cl.Kind)), glyph, 3), kit.Sp(muted, advice),
+				kit.Cell(t.S(glyphColor(c, cl)), glyph, 3), kit.Sp(muted, advice),
 			}, nil))
 		}
 	} else {
@@ -520,7 +530,7 @@ func (o *Overview) helpLines() []string {
 		}},
 		{"Marks", [][2]string{
 			{"·", "plain files — go to the Trash"}, {"●", "cache — safe, will be rebuilt"},
-			{"◆", "recipe — needs the right order of commands"}, {"○", "personal — view only"},
+			{"◆", "recipe — needs the right order of commands"}, {"○", "protected — open it and pick what to remove inside"},
 		}},
 	}
 	lines := []string{kit.Blank(t, c.W)}

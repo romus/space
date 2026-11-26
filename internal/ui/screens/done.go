@@ -96,6 +96,15 @@ func (d *Done) Lines() []string {
 	case res.Trashed > 0:
 		title = "Moved " + humanize.Bytes(res.Trashed) + " to the Trash"
 	}
+	failures := res.Failures()
+	removed := false
+	for _, s := range res.Steps {
+		removed = removed || s.Bytes > 0
+	}
+	if len(failures) > 0 && !removed && res.Failed < 0 && !res.Stopped {
+		glyph, gc = "✗", t.Danger
+		title = "Nothing was removed"
+	}
 	if res.Trashed > 0 {
 		notes = append(notes, "Space comes back when the Trash is emptied — press e.")
 		if float64(reclaimed) > noise {
@@ -110,6 +119,49 @@ func (d *Done) Lines() []string {
 	}
 	for _, n := range notes {
 		block = append(block, kit.Center(t, w, kit.Sp(muted, n)))
+	}
+	// What had to be left behind, and why.
+	if n := len(failures); n > 0 {
+		const show = 5
+		noun := "items"
+		if n == 1 {
+			noun = "item"
+		}
+		block = append(block, kit.Blank(t, w),
+			kit.Center(t, w, kit.Sp(t.S(t.Danger), fmt.Sprintf("%d %s could not be removed", n, noun))))
+		room := max(20, w-8)
+		shown := failures[:min(n, show)]
+		for i := 0; i < len(shown); {
+			// Paths left behind for the same reason share one explanation.
+			j := i
+			for j < len(shown) && shown[j].Reason == shown[i].Reason {
+				j++
+			}
+			reason := shown[i].Reason
+			path := func(f engine.Failure) string {
+				p := c.Tilde(f.Path)
+				if kit.Width(p) > room {
+					p = strings.TrimRight(kit.FitLeft(p, room), " ")
+				}
+				return p
+			}
+			if one := path(shown[i]) + " — " + reason; j-i == 1 && kit.Width(one) <= room {
+				block = append(block, kit.Center(t, w,
+					kit.Sp(t.S(t.Text), path(shown[i])), kit.Sp(muted, " — "+reason)))
+			} else {
+				for _, f := range shown[i:j] {
+					block = append(block, kit.Center(t, w, kit.Sp(t.S(t.Text), path(f))))
+				}
+				for _, line := range wrap(reason, min(room, 80)) {
+					block = append(block, kit.Center(t, w, kit.Sp(muted, line)))
+				}
+			}
+			i = j
+		}
+		if n > show {
+			block = append(block, kit.Center(t, w,
+				kit.Sp(muted, fmt.Sprintf("+%d more — press l for the log", n-show))))
+		}
 	}
 	block = append(block, kit.Blank(t, w))
 

@@ -18,10 +18,9 @@ import (
 type Kind int
 
 const (
-	Plain    Kind = iota // ordinary files: go to the Trash
-	Cache                // safe to delete, will be rebuilt
-	Special              // owned by a recipe: needs the right order of commands
-	Personal             // personal data: view only
+	Plain   Kind = iota // ordinary files: go to the Trash
+	Cache               // safe to delete, will be rebuilt
+	Special             // owned by a recipe: needs the right order of commands
 )
 
 // Glyph is the one-character mark shown next to a row. Glyphs carry the same
@@ -32,8 +31,6 @@ func (k Kind) Glyph() string {
 		return "●"
 	case Special:
 		return "◆"
-	case Personal:
-		return "○"
 	}
 	return ""
 }
@@ -58,7 +55,7 @@ type Item struct {
 	Path    string
 	Title   string
 	Bytes   int64             // on disk, st_blocks × 512
-	Kind    Kind              // Plain | Cache | Special | Personal
+	Kind    Kind              // Plain | Cache | Special
 	Locked  string            // "api-dev · running": cannot be selected
 	ModTime time.Time         // last used / created
 	Default bool              // part of the default selection

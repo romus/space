@@ -11,7 +11,7 @@ space  ~/                                     Macintosh HD  ██████�
   ◆ .local/         ███████▊                           38.4 GB    12%   podman machine
     Developer/      ██████▍                            31.7 GB    10%
     Projects/       █████▋                             27.9 GB     9%   node_modules × 41 · 9.1 GB
-  ○ Pictures/       █▉                                  9.6 GB     3%   Photos · view only
+  ○ Pictures/       █▉                                  9.6 GB     3%
   ● .npm/           ▊                                   4.2 GB     1%   npm cache
 ```
 
@@ -27,12 +27,22 @@ space  ~/                                     Macintosh HD  ██████�
    | `·` | plain files | moved to the Trash |
    | `●` | cache | deleted; it will be rebuilt |
    | `◆` | owned by a recipe | the recipe runs the right commands in the right order |
-   | `○` | personal data | view only, never removed |
+   | `○` | protected folder | cannot be removed whole: open it and pick inside |
 
 3. **Nothing runs without a plan.** The plan is exactly the commands that will
    run. Copy it as a shell script with `c`, or `space plan --script > clean.sh`.
 4. **Reversible by default.** `d` moves to the Trash, `D` deletes for good and
    asks twice.
+
+`○` marks the folders nobody means to lose in one keystroke: `Documents`,
+`Desktop`, `Pictures`, `Music`, `Movies`, `Downloads`, `Library` and a few
+more. The folder itself stays; everything inside it can be removed.
+
+When something cannot be removed, space removes the rest and lists what stayed
+behind with the reason, such as macOS not allowing it without Full Disk Access.
+
+space shows the folder it is started in and never goes above it. Started above
+your home folder (in `/` or `/Users`), it only looks: nothing can be removed.
 
 ## Recipes
 
@@ -54,7 +64,9 @@ touched, and neither is a session that is open right now.
 ## Usage
 
 ```
-space [path]                    open the interface, on ~ by default
+space                           open the folder you are in
+space ~/Downloads               open another folder
+space --path ~/Downloads        the same, as a flag (-p for short)
 space --files                   start on the Files tab
 space --theme system|light|dark
 
@@ -118,13 +130,15 @@ Requires Go 1.27 or later and macOS.
 make build     # ./space
 make install   # ~/.local/bin/space; PREFIX=/usr/local for a system-wide one
 make uninstall # removes the binary, keeps settings and logs
+make uninstall-all  # removes the binary, settings, state and logs
 make test
 make lint
 make run       # try it on a throwaway home in /tmp/space-home
 ```
 
-`SPACE_HOME=<dir>` makes space treat a folder as the home directory: it scans
-it, looks for `.claude` and `.codex` inside it, and uses its own `.Trash`.
+`SPACE_HOME=<dir>` makes space treat a folder as the home directory: it opens
+it instead of the current folder, looks for `.claude` and `.codex` inside it,
+and uses its own `.Trash`.
 `hack/mkfixture.sh <dir>` fills such a folder with test data.
 
 ## Layout

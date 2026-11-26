@@ -66,6 +66,13 @@ type Screen interface {
 	Typing() bool
 }
 
+// Starter is implemented by screens that have work to begin once they are
+// on the stack. The app calls Start right after it places the screen, so
+// nothing the screen waits for can arrive before the screen does.
+type Starter interface {
+	Start() tea.Cmd
+}
+
 // Interrupter is implemented by screens that handle ctrl+c themselves.
 type Interrupter interface {
 	Interrupt() (Screen, tea.Cmd)

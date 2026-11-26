@@ -65,7 +65,6 @@ type Theme struct {
 	SoftSel    color.Color // highlighted step on the plan screen
 	Bar        color.Color // size bars
 	BarCur     color.Color // size bar of the current row
-	BarDim     color.Color // size bar of personal, view-only rows
 	Recipe     color.Color // ◆ and everything a recipe owns
 	Safe       color.Color // ●, ✓, SAFE and REVERSIBLE
 	Danger     color.Color // IRREVERSIBLE
@@ -92,7 +91,6 @@ func DarkTheme() *Theme {
 		SoftSel:    hex("#1C1C20"),
 		Bar:        hex("#6B6B73"),
 		BarCur:     hex("#FFFFFF"),
-		BarDim:     hex("#3A3A42"),
 		Recipe:     hex("#C29BFF"),
 		Safe:       hex("#7FC8A9"),
 		Danger:     hex("#FF7A6E"),
@@ -118,7 +116,6 @@ func LightTheme() *Theme {
 		SoftSel:    hex("#F5F5F7"),
 		Bar:        hex("#B4B4BB"),
 		BarCur:     hex("#000000"),
-		BarDim:     hex("#DCDCE0"),
 		Recipe:     hex("#8944AB"),
 		Safe:       hex("#1E8449"),
 		Danger:     hex("#C4352A"),

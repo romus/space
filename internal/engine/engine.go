@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,12 +51,22 @@ type NeedTerminal struct {
 	Done chan error
 }
 
+// Failure is one path a removal step could not remove, and why.
+type Failure struct {
+	Path   string
+	Reason string // in plain words, ready to show
+	Err    error
+}
+
 // StepResult is the outcome of one step.
 type StepResult struct {
-	Ran     bool
-	Err     error
-	Elapsed time.Duration
-	Bytes   int64 // bytes removed or moved, when the engine knows
+	// Failures are the paths a removal step had to leave behind. They do
+	// not stop the plan: the other paths, and the steps after, still run.
+	Failures []Failure
+	Ran      bool
+	Err      error
+	Elapsed  time.Duration
+	Bytes    int64 // bytes removed or moved, when the engine knows
 }
 
 // Result is the outcome of a whole run.
@@ -79,6 +90,15 @@ func (r Result) Reclaimed() int64 {
 		return d
 	}
 	return 0
+}
+
+// Failures lists every path that could not be removed, across all steps.
+func (r Result) Failures() []Failure {
+	var out []Failure
+	for _, s := range r.Steps {
+		out = append(out, s.Failures...)
+	}
+	return out
 }
 
 // Done counts the steps that ran without error.
@@ -175,12 +195,13 @@ func (e *Engine) Run(ctx context.Context, plan recipe.Plan, emit func(Event)) Re
 		}}
 		t0 := time.Now()
 		var (
-			err   error
-			bytes int64
+			err      error
+			bytes    int64
+			failures []Failure
 		)
 		switch {
 		case step.Remove != nil:
-			bytes, err = e.remove(ctx, step.Remove, out)
+			bytes, failures, err = e.remove(ctx, step.Remove, out)
 			if step.Remove.ToTrash {
 				res.Trashed += bytes
 			}
@@ -192,12 +213,17 @@ func (e *Engine) Run(ctx context.Context, plan recipe.Plan, emit func(Event)) Re
 			err = exe.Exec(ctx, step.Cmd, out)
 		}
 		out.Flush()
-		sr := StepResult{Ran: true, Err: err, Elapsed: time.Since(t0), Bytes: bytes}
+		sr := StepResult{Ran: true, Err: err, Elapsed: time.Since(t0), Bytes: bytes, Failures: failures}
 		res.Steps[i] = sr
 		if err != nil {
 			fmt.Fprintf(log, "!!! step %d failed: %v\n", i+1, err)
 		}
 		emit(StepFinished{Index: i, Result: sr})
+		if err != nil && ctx.Err() != nil {
+			// Cut short by the user, not broken.
+			res.Stopped = true
+			break
+		}
 		if err != nil {
 			res.Failed = i
 			res.Err = err
@@ -302,22 +328,26 @@ func (w *lineWriter) Flush() {
 
 // remove deletes or trashes the paths of a step, one by one, refusing
 // anything outside the step's root.
-func (e *Engine) remove(ctx context.Context, r *recipe.Remove, out io.Writer) (int64, error) {
-	root, err := checkRoot(r.Root, e.Home)
+//
+// The paths are independent, so one that cannot be removed does not stop
+// the rest: it is reported as a Failure with the reason. Only a root that
+// is not allowed at all fails the whole step.
+func (e *Engine) remove(ctx context.Context, r *recipe.Remove, out io.Writer) (int64, []Failure, error) {
+	root, err := CheckRoot(r.Root, e.Home)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	trash := e.Trash
 	if r.ToTrash && trash == nil {
 		trash = SystemTrash(e.Home)
 	}
 	var (
-		total   int64
-		skipped int
+		total    int64
+		failures []Failure
 	)
 	for i, p := range r.Paths {
 		if ctx.Err() != nil {
-			return total, ctx.Err()
+			return total, failures, ctx.Err()
 		}
 		var ino uint64
 		if i < len(r.Inodes) {
@@ -326,10 +356,11 @@ func (e *Engine) remove(ctx context.Context, r *recipe.Remove, out io.Writer) (i
 		size, err := e.removeOne(p, root, ino, r.ToTrash, trash)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			skipped++
 			fmt.Fprintf(out, "already gone: %s\n", humanize.Tilde(p, e.Home))
 		case err != nil:
-			return total, fmt.Errorf("%s: %w", p, err)
+			f := Failure{Path: p, Reason: Explain(err), Err: err}
+			failures = append(failures, f)
+			fmt.Fprintf(out, "could not remove %s: %s\n", humanize.Tilde(p, e.Home), f.Reason)
 		default:
 			total += size
 			verb := "removed"
@@ -339,7 +370,32 @@ func (e *Engine) remove(ctx context.Context, r *recipe.Remove, out io.Writer) (i
 			fmt.Fprintf(out, "%s %s  %s\n", verb, humanize.Bytes(size), humanize.Tilde(p, e.Home))
 		}
 	}
-	return total, nil
+	return total, failures, nil
+}
+
+// Explain says in plain words why a path could not be removed.
+func Explain(err error) string {
+	switch {
+	case errors.Is(err, ErrUnsafe), errors.Is(err, ErrChanged):
+		return err.Error()
+	case errors.Is(err, fs.ErrPermission):
+		return "macOS did not allow it. Give your terminal Full Disk Access in " +
+			"System Settings › Privacy & Security, or remove it in Finder"
+	case errors.Is(err, syscall.EBUSY):
+		return "in use by another program"
+	case errors.Is(err, syscall.EROFS):
+		return "the disk is read-only"
+	}
+	// The system's own words, without the path repeated in front.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // ErrUnsafe is returned when a path fails the safety checks.
@@ -348,7 +404,10 @@ var ErrUnsafe = errors.New("refused: outside the allowed folder")
 // ErrChanged is returned when a path is not the one the plan was made for.
 var ErrChanged = errors.New("refused: changed since the plan was made")
 
-func checkRoot(root, home string) (string, error) {
+// CheckRoot decides whether files may be removed under root, and returns
+// the root with symlinks resolved. Nothing may be removed under "/" or under
+// any folder that contains the home directory.
+func CheckRoot(root, home string) (string, error) {
 	if root == "" || !filepath.IsAbs(root) {
 		return "", fmt.Errorf("%w: no root", ErrUnsafe)
 	}

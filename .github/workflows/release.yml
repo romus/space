@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-26
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.sha.outputs.sha256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The tag is the only place the version lives.
+      - name: Read the version from the tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]]; then
+            echo "Tag $GITHUB_REF_NAME is not a version like v1.2.3" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Lint and test
+        run: make lint test
+
+      - name: Build the universal archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make dist VERSION="$VERSION"
+
+      - name: Verify the binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          lipo dist/space -verify_arch arm64
+          lipo dist/space -verify_arch x86_64
+          codesign --verify --strict --verbose=2 dist/space
+          test "$(dist/space version | head -n 1)" = "space $VERSION"
+
+      - name: Compute SHA256
+        id: sha
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          SHA=$(shasum -a 256 "dist/space-$VERSION-macos-universal.tar.gz" | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "### SHA256"
+            echo '```'
+            echo "$SHA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          RANGE="HEAD"
+          [ -n "$PREV_TAG" ] && RANGE="${PREV_TAG}..HEAD"
+          {
+            echo "changelog<<EOF"
+            git log "$RANGE" --pretty=format:"- %s" --no-merges
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-archive
+          path: dist/space-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/space-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+          body: |
+            ## space v${{ steps.version.outputs.version }}
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### Install
+            ```
+            brew tap romus/tap
+            brew trust romus/tap
+            brew install space
+            ```
+
+            ### SHA256
+            ```
+            ${{ steps.sha.outputs.sha256 }}
+            ```
+
+  smoke-test:
+    needs: build
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-archive
+          path: dist
+
+      - name: Render a local formula
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          scripts/render_formula.sh \
+            --version "$VERSION" \
+            --sha256 "$SHA256" \
+            --url "file://${GITHUB_WORKSPACE}/dist/space-${VERSION}-macos-universal.tar.gz" \
+            --output "${RUNNER_TEMP}/space.rb"
+
+      - name: Install it from a temporary tap
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          brew tap-new local/space
+          TAP_DIR="$(brew --repository)/Library/Taps/local/homebrew-space"
+          mkdir -p "$TAP_DIR/Formula"
+          cp "${RUNNER_TEMP}/space.rb" "$TAP_DIR/Formula/space.rb"
+          # Homebrew 7 refuses to load formulae from a tap nobody has trusted.
+          brew trust local/space
+          brew install local/space/space
+
+      - name: Verify the installed binary
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          PREFIX="$(brew --prefix)"
+          test "$("$PREFIX/bin/space" version | head -n 1)" = "space $VERSION"
+          test -s "$PREFIX/share/zsh/site-functions/_space"
+          brew test local/space/space
+
+      - name: Uninstall
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew uninstall local/space/space
+
+  update-tap:
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render the formula
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          scripts/render_formula.sh \
+            --version "$VERSION" \
+            --sha256 "$SHA256" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --output "${RUNNER_TEMP}/space.rb"
+
+      - name: Open a pull request in romus/homebrew-tap
+        uses: romus/homebrew-tap/.github/actions/bump@main
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_PAT }}
+          type: formula
+          name: space
+          version: ${{ needs.build.outputs.version }}
+          file: ${{ runner.temp }}/space.rb
+          body: |
+            - Archive: ${{ github.server_url }}/${{ github.repository }}/releases/download/v${{ needs.build.outputs.version }}/space-${{ needs.build.outputs.version }}-macos-universal.tar.gz
+            - SHA256: `${{ needs.build.outputs.sha256 }}`

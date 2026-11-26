@@ -12,6 +12,8 @@ make test     # go test ./...
 make lint     # go vet -composites=false ./... and a gofmt check
 make fmt      # gofmt -w .
 make run      # build, create a throwaway home in /tmp/space-home, run space on it
+make dist     # universal binary + dist/space-<version>-macos-universal.tar.gz + SHA256
+make formula  # render dist/space.rb for that archive (FORMULA_URL=file://… for a local tap)
 ```
 
 - One test: `go test ./internal/engine -run 'TestName' -v`
@@ -49,3 +51,10 @@ Implement `recipe.Recipe`, register it in `init()`, and keep the `recipe.Env` gi
 - Colours come only from `theme.Theme` fields through `t.Base()`, `t.S()`, `t.Sel()`, `t.Soft()`, never hex values in screens. These helpers also carry the window background and the `NO_COLOR` path (reverse video for the selection; the glyphs `· ● ◆ ○` carry the meaning).
 - Theme `system` means the terminal's own background, asked over OSC 11. space paints the background itself, so the probe in `app.go` resets it, asks, and paints again in one write. The fallback is the macOS appearance, then dark. Precedence of the setting: `--theme`, `SPACE_THEME`, `config.toml`, `state.json`.
 - Screen order for any removal: Overview or a recipe screen → `Plan` → `Run` → `Done`, all carrying one `PlanSpec` (`Rebuild` re-plans after a toggle, `Measure` reads the recipe's own number). Editing a command on the plan screen drops `Rebuild`: the plan is no longer the recipe's.
+
+## Versioning and release
+
+- The version is the git tag and lives nowhere else. The Makefile strips the leading `v` (`git describe`), so tag `v1.2.3` builds `space 1.2.3`; the linker stamps it into `main.version`.
+- Pushing a `v*` tag runs `.github/workflows/release.yml`: lint and test, `make dist` (arm64 and amd64 joined with `lipo`, archived as `space-<version>-macos-universal.tar.gz`), GitHub release, an install smoke test through a temporary tap, then a pull request against the shared tap `romus/homebrew-tap` through its bump action (`romus/homebrew-tap/.github/actions/bump`, secret `HOMEBREW_TAP_PAT`).
+- The formula template is `scripts/render_formula.sh`; `Formula/space.rb` in the tap is never edited by hand. It has no `version` line: Homebrew reads the version from the archive name, so that name is part of the contract.
+- The formula installs a prebuilt binary, so nothing is compiled on the user's Mac and Homebrew does not quarantine it. `make dist` signs both slices ad hoc (`dev.romus.space`): the Go linker signs only arm64, and `codesign --verify` fails on a file with an unsigned slice.

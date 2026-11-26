@@ -1,4 +1,5 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# The version is the git tag without its leading v: tag v1.2.3 builds "space 1.2.3".
+VERSION ?= $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | sed 's/^v//')
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 DATE    ?= $(shell date -u +%Y-%m-%d)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
@@ -9,11 +10,16 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.dat
 PREFIX ?= $(HOME)/.local
 BINDIR := $(PREFIX)/bin
 
+# The release archive Homebrew installs: one universal binary, so the formula
+# needs a single checksum.
+DIST    := dist
+ARCHIVE := space-$(VERSION)-macos-universal.tar.gz
+
 # What space keeps for the user, at the same paths the program works out.
 CONFIG_DIR = $${XDG_CONFIG_HOME:-$$HOME/.config}/space
 STATE_DIR  = $${XDG_STATE_HOME:-$$HOME/.local/state}/space
 
-.PHONY: build install uninstall uninstall-all test lint fmt fixture run clean
+.PHONY: build install uninstall uninstall-all dist formula test lint fmt fixture run clean
 
 install: build ## install space into $(PREFIX)/bin
 	install -d "$(BINDIR)"
@@ -37,6 +43,30 @@ uninstall-all: ## remove space and everything it keeps: settings, state, logs
 build: ## build ./space for this Mac
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o space ./cmd/space
 
+dist: ## build the universal binary and archive it for Homebrew in dist/
+	rm -rf $(DIST)
+	mkdir -p $(DIST)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/space-arm64 ./cmd/space
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/space-amd64 ./cmd/space
+	lipo -create -output $(DIST)/space $(DIST)/space-arm64 $(DIST)/space-amd64
+	rm $(DIST)/space-arm64 $(DIST)/space-amd64
+	@# The Go linker signs only the arm64 slice. Sign both, ad hoc, so the
+	@# whole file passes `codesign --verify`.
+	codesign --force --sign - --identifier dev.romus.space $(DIST)/space
+	cp LICENSE $(DIST)/LICENSE
+	COPYFILE_DISABLE=1 tar -C $(DIST) -czf $(DIST)/$(ARCHIVE) space LICENSE
+	@echo "$(DIST)/$(ARCHIVE)"
+	@echo "sha256: $$(shasum -a 256 $(DIST)/$(ARCHIVE) | awk '{print $$1}')"
+
+# FORMULA_URL points the formula at another download, such as a file:// path
+# to the archive in dist/ for trying it from a local tap.
+formula: ## render the Homebrew formula for the archive in dist/
+	scripts/render_formula.sh \
+		--version "$(VERSION)" \
+		--sha256 "$$(shasum -a 256 $(DIST)/$(ARCHIVE) | awk '{print $$1}')" \
+		$(if $(FORMULA_URL),--url "$(FORMULA_URL)") \
+		--output $(DIST)/space.rb
+
 test: ## run every test
 	go test ./...
 
@@ -55,4 +85,4 @@ run: build fixture ## try space on the throwaway home, never on real data
 
 clean:
 	rm -f space
-	rm -rf dist
+	rm -rf $(DIST)

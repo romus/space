@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # macOS only: almost every package is built with the darwin tag.
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+      # The release workflow is the first to use this script otherwise, and
+      # by then the tag is already pushed.
+      - name: Check the formula template renders
+        run: |
+          scripts/render_formula.sh \
+            --version 0.0.0 \
+            --sha256 "$(printf '0%.0s' {1..64})" \
+            --output "$RUNNER_TEMP/space.rb"
+          ruby -c "$RUNNER_TEMP/space.rb"

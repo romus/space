@@ -15,6 +15,18 @@ space  ~/                                     Macintosh HD  ██████�
   ● .npm/           ▊                                   4.2 GB     1%   npm cache
 ```
 
+## Install
+
+```
+brew tap romus/tap
+brew trust romus/tap
+brew install space
+```
+
+Homebrew asks you to trust a third-party tap before it loads anything from it,
+hence `brew trust`. The formula installs one binary for Apple silicon and
+Intel, with shell completions. Or [build it yourself](#building).
+
 ## How it works
 
 1. **Size is the only hierarchy.** Everything is sorted by the space it takes
@@ -136,7 +148,12 @@ make uninstall-all  # removes the binary, settings, state and logs
 make test
 make lint
 make run       # try it on a throwaway home in /tmp/space-home
+make dist      # dist/space-<version>-macos-universal.tar.gz, what Homebrew installs
 ```
+
+`make install` and Homebrew put the binary in different places
+(`~/.local/bin` and Homebrew's `bin`). With both, your `PATH` decides which
+one runs; `make uninstall` removes the first.
 
 `SPACE_HOME=<dir>` makes space treat a folder as the home directory: it opens
 it instead of the current folder, looks for `.claude` and `.codex` inside it,

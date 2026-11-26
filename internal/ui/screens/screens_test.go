@@ -115,6 +115,15 @@ func TestPodmanScreen(t *testing.T) {
 	scr = press(scr, " ")
 	wantAll(t, text(t, scr, c), "In use by api-dev · running — it stays", "4 items · 4.8 GB")
 
+	// An image with several tags is one row that says so.
+	p3, c3 := podmanScreen(t)
+	for i, it := range p3.rs.Items {
+		if it.Title == "docker.io/library/node:20-bookworm" {
+			p3.rs.Items[i].Meta["tags"] = "docker.io/library/node:20-bookworm,docker.io/library/node:20"
+		}
+	}
+	wantAll(t, text(t, p3, c3), "[✓] docker.io/library/node:20-bookworm  +1 tag")
+
 	// The next section.
 	p2, c2 := podmanScreen(t)
 	scr = press(p2, "l")
@@ -213,9 +222,16 @@ func TestDoneScreen(t *testing.T) {
 	failed.Steps = append([]engine.StepResult{}, steps...)
 	failed.Steps[2].Err = failed.Err
 	failed.Steps[3], failed.Steps[4] = engine.StepResult{}, engine.StepResult{}
+	failed.Steps[2].Tail = []string{
+		"Error: 2 errors occurred:",
+		"\t* unable to delete image \"4e6c5a55f01d\" by ID with more than one tag: please force removal",
+	}
 	s := text(t, NewDone(c, spec, failed), c)
 	wantAll(t, s, "✗", "Step 3 failed: Tell your Mac which blocks are free",
-		"podman exited with status 125", "The 2 steps before it ran and stay done.")
+		"podman exited with status 125", "The 2 steps before it ran and stay done.",
+		// What podman itself said is on the screen, not only in the log.
+		"Error: 2 errors occurred:", "* unable to delete image", "removal",
+		"The full output is in the log — press l.")
 	if strings.Contains(s, "start machine") {
 		t.Fatal("follow-ups are not offered after a failure")
 	}

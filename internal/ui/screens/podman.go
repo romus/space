@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -238,12 +239,19 @@ func (p *Podman) Lines() []string {
 		if used == "" {
 			used = "—"
 		}
+		// An image is one row whatever its number of tags: removing it
+		// drops them all, so the row says how many more there are.
+		name := it.Title
+		if n := strings.Count(it.Meta["tags"], ","); n > 0 {
+			more := "  +" + humanize.Plural(n, "tag")
+			name = strings.TrimRight(kit.Fit(name, max(1, nameW-1-kit.Width(more))), " ") + more
+		}
 		created := "—"
 		if !it.ModTime.IsZero() && it.ModTime.Unix() > 0 {
 			created = humanize.Age(it.ModTime, now)
 		}
 		top = append(top, kit.Row(w, style(t.Text), []kit.Span{
-			kit.Cell(style(bc), box, 4), kit.Cell(style(nc), it.Title, nameW),
+			kit.Cell(style(bc), box, 4), kit.Cell(style(nc), name, nameW),
 			kit.Cell(style(t.Faint), it.Meta["id"], 13),
 			kit.CellR(style(nc), humanize.Bytes(it.Bytes), 10), kit.CellR(style(t.Muted), created, 10),
 			kit.Cell(style(t.Text), "", 3), kit.Cell(style(uc), used, usedW),

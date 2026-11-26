@@ -1,0 +1,5 @@
+[
+  {"Id": "4e6c5a55f01db07cccc6cbc1ae6f86eee2649ed4bfaec7ed2789a9ba9d565eea", "Names": ["docker.io/library/node:22-bookworm-slim", "docker.io/library/node:22-slim"], "Size": 250000000, "Created": 1794000000, "Containers": 0},
+  {"Id": "4e6c5a55f01db07cccc6cbc1ae6f86eee2649ed4bfaec7ed2789a9ba9d565eea", "Names": ["docker.io/library/node:22-bookworm-slim", "docker.io/library/node:22-slim"], "Size": 250000000, "Created": 1794000000, "Containers": 0},
+  {"Id": "c81f2e4d9a07cccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "Names": ["docker.io/library/node:20-bookworm"], "Size": 1100000000, "Created": 1782000000, "Containers": 0}
+]

@@ -67,7 +67,13 @@ type StepResult struct {
 	Err      error
 	Elapsed  time.Duration
 	Bytes    int64 // bytes removed or moved, when the engine knows
+	// Tail is the last lines a failed step printed: usually the tool's own
+	// words for what went wrong. Empty when the step did not fail.
+	Tail []string
 }
+
+// tailLines is how much of a failed step's output is kept in its result.
+const tailLines = 5
 
 // Result is the outcome of a whole run.
 type Result struct {
@@ -214,6 +220,9 @@ func (e *Engine) Run(ctx context.Context, plan recipe.Plan, emit func(Event)) Re
 		}
 		out.Flush()
 		sr := StepResult{Ran: true, Err: err, Elapsed: time.Since(t0), Bytes: bytes, Failures: failures}
+		if err != nil {
+			sr.Tail = out.Tail()
+		}
 		res.Steps[i] = sr
 		if err != nil {
 			fmt.Fprintf(log, "!!! step %d failed: %v\n", i+1, err)
@@ -294,7 +303,23 @@ func (realExec) Exec(ctx context.Context, argv []string, out io.Writer) error {
 type lineWriter struct {
 	mu   sync.Mutex
 	buf  []byte
+	last []string // the last few lines, for the result of a failed step
 	emit func(string)
+}
+
+func (w *lineWriter) line(s string) {
+	w.last = append(w.last, s)
+	if len(w.last) > tailLines {
+		w.last = w.last[1:]
+	}
+	w.emit(s)
+}
+
+// Tail returns the last lines written so far.
+func (w *lineWriter) Tail() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.last...)
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -309,7 +334,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		line := string(w.buf[:i])
 		w.buf = w.buf[i+1:]
 		if line != "" {
-			w.emit(line)
+			w.line(line)
 		}
 	}
 	return len(p), nil
@@ -319,7 +344,7 @@ func (w *lineWriter) Flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.buf) > 0 {
-		w.emit(string(w.buf))
+		w.line(string(w.buf))
 		w.buf = nil
 	}
 }

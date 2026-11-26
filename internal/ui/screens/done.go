@@ -79,14 +79,24 @@ func (d *Done) Lines() []string {
 	glyph, gc := "✓", t.Safe
 	title := "Done"
 	sub := fmt.Sprintf("%s · %s", humanize.Plural(res.Done(), "step"), humanize.Duration(res.Elapsed))
-	var notes []string
+	var notes []kit.Span
+	note := func(s string) { notes = append(notes, kit.Sp(muted, s)) }
 	switch {
 	case res.Failed >= 0:
 		glyph, gc = "✗", t.Danger
 		title = fmt.Sprintf("Step %d failed: %s", res.Failed+1, res.Plan.Steps[res.Failed].Title)
-		notes = append(notes, res.Err.Error())
+		note(res.Err.Error())
+		// What the command itself said, so the reason is on the screen
+		// and not only in the log.
+		said := failureOutput(res.Steps[res.Failed].Tail, min(max(20, w-8), 80))
+		for _, line := range said {
+			notes = append(notes, kit.Sp(t.S(t.Text), line))
+		}
+		if len(said) > 0 {
+			note("The full output is in the log — press l.")
+		}
 		if res.Failed > 0 {
-			notes = append(notes, fmt.Sprintf("The %s before it ran and stay done.", humanize.Plural(res.Failed, "step")))
+			note(fmt.Sprintf("The %s before it ran and stay done.", humanize.Plural(res.Failed, "step")))
 		}
 	case res.Stopped:
 		glyph, gc = "■", t.Muted
@@ -106,7 +116,7 @@ func (d *Done) Lines() []string {
 		title = "Nothing was removed"
 	}
 	if res.Trashed > 0 {
-		notes = append(notes, "Space comes back when the Trash is emptied — press e.")
+		note("Space comes back when the Trash is emptied — press e.")
 		if float64(reclaimed) > noise {
 			sub += " · " + humanize.Bytes(res.Trashed) + " in the Trash"
 		}
@@ -118,7 +128,7 @@ func (d *Done) Lines() []string {
 		kit.Center(t, w, kit.Sp(muted, sub)),
 	}
 	for _, n := range notes {
-		block = append(block, kit.Center(t, w, kit.Sp(muted, n)))
+		block = append(block, kit.Center(t, w, n))
 	}
 	// What had to be left behind, and why.
 	if n := len(failures); n > 0 {
@@ -214,4 +224,21 @@ func (d *Done) Lines() []string {
 	}
 	hints = append(hints, kit.Hint{Key: "l", Label: "log"}, kit.Hint{Key: "q", Label: "quit"})
 	return kit.Frame(t, w, c.H, head, []string{kit.Footer(t, w, hints, nil, "⏎", "back to overview")})
+}
+
+// failureOutput picks what to show of a failed command's output: its last
+// lines, wrapped to the width, and no more than a few rows of them.
+func failureOutput(tail []string, width int) []string {
+	const lines, rows = 3, 6
+	if len(tail) > lines {
+		tail = tail[len(tail)-lines:]
+	}
+	var out []string
+	for _, l := range tail {
+		out = append(out, wrap(l, width)...)
+	}
+	if len(out) > rows {
+		out = append(out[:rows-1], "…")
+	}
+	return out
 }

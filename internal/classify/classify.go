@@ -1,5 +1,5 @@
-// Package classify decides how a path may be removed: to the Trash, safely
-// as a cache, through a recipe, or not at all.
+// Package classify decides how a path may be removed: as plain files, as a
+// cache that is safe to delete outright, through a recipe, or not at all.
 package classify
 
 import (
@@ -199,7 +199,7 @@ func (c *Classifier) Path(path string) Class {
 func (c Class) Advice() string {
 	switch {
 	case c.Kind == recipe.Cache:
-		return "Safe to remove — it will be rebuilt when needed. Mark it with space, then press enter for the plan."
+		return "Safe to remove — it will be rebuilt when needed. Press d to move it to the Trash, D to delete it right away."
 	case c.Protected:
 		return "Too important to remove whole. Open it with → and pick what to remove inside."
 	}

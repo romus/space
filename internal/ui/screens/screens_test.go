@@ -142,14 +142,17 @@ func TestPodmanScreenBuildsTheRecipePlan(t *testing.T) {
 	}
 	s := text(t, msg.Screen, c)
 	wantAll(t, s, "Recipes › Podman › Plan", "Remove 1 container", "Remove 3 images",
-		"Tell your Mac which blocks are free", "Stop the machine", "↓ 1 step more",
-		"1 [✓] stop when done", "2 [ ] start again after", "machine disk on Mac")
+		"Tell your Mac which blocks are free", "Stop the machine", "↓ 2 steps more",
+		"1 [✓] stop when done", "2 [✓] start again after", "machine disk on Mac")
 
-	// Turning the switch off rebuilds the plan without the stop step.
+	// Turning the switch off rebuilds the plan without the stop step, and
+	// with nothing stopped there is nothing to start again.
 	next := press(msg.Screen, "1")
 	s = text(t, next, c)
-	if strings.Contains(s, "Stop the machine") {
-		t.Fatalf("the stop step should be gone:\n%s", s)
+	for _, gone := range []string{"Stop the machine", "Start the machine again", "start again after"} {
+		if strings.Contains(s, gone) {
+			t.Fatalf("%q should be gone:\n%s", gone, s)
+		}
 	}
 	wantAll(t, s, "1 [ ] stop when done")
 }

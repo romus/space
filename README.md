@@ -62,7 +62,7 @@ A recipe handles what you cannot simply delete.
 
 | Recipe | Owns | What it does |
 | --- | --- | --- |
-| Podman | `~/.local/share/containers` | removes the images, containers and volumes you pick, runs `fstrim` inside the machine so macOS learns which blocks are free, then stops the machine |
+| Podman | `~/.local/share/containers` | removes the images, containers and volumes you pick, runs `fstrim` inside the machine so macOS learns which blocks are free, then stops the machine and starts it again |
 | Claude Code | `~/.claude` | moves sessions you have not used for a while to the Trash, with their sub-agent logs and file checkpoints |
 | Codex | `~/.codex` | moves old session rollouts to the Trash and deletes old logs |
 

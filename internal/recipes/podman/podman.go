@@ -5,7 +5,8 @@
 // The machine's disk is a sparse file on the Mac. Deleting images frees
 // blocks inside the Linux VM, but macOS only gets them back after fstrim
 // runs in the VM, and that needs the machine running. So the order matters:
-// remove, trim, then stop.
+// remove, trim, stop, then start again. A machine that was running is left
+// running.
 package podman
 
 import (
@@ -76,10 +77,10 @@ func (r *Recipe) Info() recipe.Info {
 		Path:   r.dataDir(),
 		Source: "built-in",
 		Hint:   "podman machine",
-		Advice: "Don’t rm this — the VM disk is sparse. Press r for the recipe: remove images, fstrim, stop the machine.",
+		Advice: "Don’t rm this — the VM disk is sparse. Press r for the recipe: remove images, fstrim, restart the machine.",
 		About: "Removes the images, containers and volumes you pick, then runs fstrim inside the machine so macOS " +
-			"learns which blocks are free, then stops the machine. Deleting the disk file by hand would destroy " +
-			"every image and volume at once.",
+			"learns which blocks are free, then stops the machine and starts it again. Deleting the disk file by " +
+			"hand would destroy every image and volume at once.",
 	}
 }
 
@@ -604,24 +605,28 @@ func (r *Recipe) Plan(sel []recipe.Item, opt recipe.Options) (recipe.Plan, error
 		Safe:  true,
 	})
 
+	// The machine was running, so it is left running: stopped, then started
+	// again. Starting is only a choice while stopping is.
 	stop := opt.Toggle(ToggleStop, true)
-	start := opt.Toggle(ToggleStart, false)
-	p.Toggles = []recipe.Toggle{
-		{Key: ToggleStop, Label: "stop when done", On: stop},
-		{Key: ToggleStart, Label: "start again after", On: start},
-	}
+	start := stop && opt.Toggle(ToggleStart, true)
+	p.Toggles = []recipe.Toggle{{Key: ToggleStop, Label: "stop when done", On: stop}}
 	if stop {
+		p.Toggles = append(p.Toggles, recipe.Toggle{Key: ToggleStart, Label: "start again after", On: start})
+		active := strings.Join(st.Active, " and ")
 		why := "Can be turned off below."
-		if len(st.Active) > 0 {
-			why += " " + strings.Join(st.Active, " and ") + " will stop too."
+		if active != "" {
+			why += " " + active + " will stop too."
 		}
 		p.Steps = append(p.Steps, recipe.Step{
 			Title: "Stop the machine", Cmd: r.machineArgs("stop"), Why: why, Reversible: true,
 		})
 		if start {
+			why := "Brings the machine back up, as it was before."
+			if active != "" {
+				why += " It does not start " + active + " again."
+			}
 			p.Steps = append(p.Steps, recipe.Step{
-				Title: "Start the machine again", Cmd: r.machineArgs("start"),
-				Why: "Brings the machine back up. Containers stay stopped.", Reversible: true,
+				Title: "Start the machine again", Cmd: r.machineArgs("start"), Why: why, Reversible: true,
 			})
 		}
 	}
@@ -634,14 +639,18 @@ func (r *Recipe) Plan(sel []recipe.Item, opt recipe.Options) (recipe.Plan, error
 
 	p.Reclaim = freed
 	p.Seconds = 15 + 5*len(p.Steps)
+	if start {
+		p.Seconds += 20
+	}
 	p.Metric = &recipe.Metric{Label: "machine disk on Mac", Before: st.OnDisk, After: max(0, st.OnDisk-freed)}
 	if removed > 0 {
 		p.Summary = append(p.Summary, fmt.Sprintf("images removed\t%d", removed))
 	}
+	// The containers stay stopped whether or not the machine comes back.
+	if stop && len(st.Active) > 0 {
+		p.Summary = append(p.Summary, strings.Join(st.Active, ", ")+"\tstopped with the machine")
+	}
 	if stop && !start {
-		if len(st.Active) > 0 {
-			p.Summary = append(p.Summary, strings.Join(st.Active, ", ")+"\tstopped with the machine")
-		}
 		p.After = []recipe.Action{{Key: "s", Label: "start machine", Plan: r.StartPlan()}}
 	}
 	return p, nil

@@ -173,19 +173,21 @@ func TestPlanOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Remove, prune, trim while the machine still runs, stop, then measure.
+	// Remove, prune, trim while the machine still runs, stop, start it again
+	// because it was running, then measure.
 	want := []string{
 		"podman rmi 3f9a1c07be52 9e04d7aa1f30 c81f2e4d9a07",
 		"podman image prune -f",
 		"podman machine ssh -- sudo fstrim -av",
 		"podman machine stop",
+		"podman machine start",
 		"du -h " + disk,
 	}
 	got := cmds(plan)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	tags := []string{"IRREVERSIBLE", "IRREVERSIBLE", "SAFE", "REVERSIBLE", "READ-ONLY"}
+	tags := []string{"IRREVERSIBLE", "IRREVERSIBLE", "SAFE", "REVERSIBLE", "REVERSIBLE", "READ-ONLY"}
 	for i, s := range plan.Steps {
 		if s.Tag() != tags[i] {
 			t.Fatalf("step %d (%s): tag %s, want %s", i+1, s.Title, s.Tag(), tags[i])
@@ -197,8 +199,14 @@ func TestPlanOrder(t *testing.T) {
 	if !strings.Contains(plan.Steps[3].Why, "api-dev and db-dev will stop too") {
 		t.Fatalf("the stop step should name what stops: %q", plan.Steps[3].Why)
 	}
-	if len(plan.After) != 1 || plan.After[0].Label != "start machine" {
-		t.Fatalf("a stopped machine should offer to start again: %+v", plan.After)
+	if !strings.Contains(plan.Steps[4].Why, "does not start api-dev and db-dev again") {
+		t.Fatalf("the start step should name what stays stopped: %q", plan.Steps[4].Why)
+	}
+	if len(plan.After) != 0 {
+		t.Fatalf("the machine runs again, nothing is left to offer: %+v", plan.After)
+	}
+	if got := strings.Join(plan.Summary, "\n"); !strings.Contains(got, "api-dev, db-dev\tstopped with the machine") {
+		t.Fatalf("the summary should say which containers stay stopped: %q", got)
 	}
 }
 
@@ -211,27 +219,49 @@ func TestPlanToggles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range cmds(keep) {
-		if strings.Contains(c, "machine stop") {
-			t.Fatal("with the toggle off the machine keeps running")
+		if strings.Contains(c, "machine stop") || strings.Contains(c, "machine start") {
+			t.Fatalf("with the toggle off the machine keeps running: %v", cmds(keep))
 		}
 	}
 	if !strings.Contains(strings.Join(cmds(keep), "\n"), "fstrim") {
 		t.Fatal("trimming alone is still worth doing")
 	}
-
-	again, _ := r.Plan(nil, recipe.Options{Toggles: map[string]bool{ToggleStart: true}})
-	got := cmds(again)
-	stop, start := -1, -1
-	for i, c := range got {
-		switch {
-		case strings.HasSuffix(c, "machine stop"):
-			stop = i
-		case strings.HasSuffix(c, "machine start"):
-			start = i
-		}
+	if len(keep.Toggles) != 1 || keep.Toggles[0].Key != ToggleStop {
+		t.Fatalf("starting again is not a choice when nothing stops: %+v", keep.Toggles)
 	}
-	if stop < 0 || start != stop+1 {
-		t.Fatalf("start again goes right after stop: %v", got)
+
+	// Where the stop and start steps are, or -1.
+	find := func(p recipe.Plan) (stop, start int) {
+		stop, start = -1, -1
+		for i, c := range cmds(p) {
+			switch {
+			case strings.HasSuffix(c, "machine stop"):
+				stop = i
+			case strings.HasSuffix(c, "machine start"):
+				start = i
+			}
+		}
+		return stop, start
+	}
+
+	// A machine that was running is started again unless the user says no.
+	again, _ := r.Plan(nil, recipe.Options{})
+	if stop, start := find(again); stop < 0 || start != stop+1 {
+		t.Fatalf("start again goes right after stop: %v", cmds(again))
+	}
+	if len(again.Toggles) != 2 || !again.Toggles[1].On {
+		t.Fatalf("start again should be on by default: %+v", again.Toggles)
+	}
+
+	down, _ := r.Plan(nil, recipe.Options{Toggles: map[string]bool{ToggleStart: false}})
+	if stop, start := find(down); stop < 0 || start >= 0 {
+		t.Fatalf("with start off the machine only stops: %v", cmds(down))
+	}
+	if len(down.After) != 1 || down.After[0].Label != "start machine" {
+		t.Fatalf("a machine left stopped should offer to start again: %+v", down.After)
+	}
+	if down.Seconds >= again.Seconds {
+		t.Fatalf("starting the machine takes time: %d s without, %d s with", down.Seconds, again.Seconds)
 	}
 }
 

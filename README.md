@@ -116,6 +116,8 @@ Requires Go 1.27 or later and macOS.
 
 ```
 make build     # ./space
+make install   # ~/.local/bin/space; PREFIX=/usr/local for a system-wide one
+make uninstall # removes the binary, keeps settings and logs
 make test
 make lint
 make run       # try it on a throwaway home in /tmp/space-home

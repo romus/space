@@ -3,7 +3,25 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 DATE    ?= $(shell date -u +%Y-%m-%d)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build test lint fmt fixture run clean
+# Where `make install` puts the binary: $(PREFIX)/bin. The default needs no
+# sudo and stays out of Homebrew's way. For a system-wide install:
+#   sudo make install PREFIX=/usr/local
+PREFIX ?= $(HOME)/.local
+BINDIR := $(PREFIX)/bin
+
+.PHONY: build install uninstall test lint fmt fixture run clean
+
+install: build ## install space into $(PREFIX)/bin
+	install -d "$(BINDIR)"
+	install -m 0755 space "$(BINDIR)/space"
+	@echo "installed $(BINDIR)/space"
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "note: $(BINDIR) is not on your PATH";; esac
+
+uninstall: ## remove space from $(PREFIX)/bin; settings and logs are kept
+	rm -f "$(BINDIR)/space"
+	@echo "removed $(BINDIR)/space"
+	@echo "kept: ~/.config/space and ~/.local/state/space (delete them by hand if you want)"
+
 
 build: ## build ./space for this Mac
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o space ./cmd/space

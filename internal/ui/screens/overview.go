@@ -5,6 +5,7 @@ package screens
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -70,6 +71,7 @@ type Overview struct {
 	tab     int
 
 	cwd      *scan.Dir
+	restore  string // folder to come back to once a rescan has reached it
 	rows     []frow
 	cur, off int
 	listing  map[string][]scan.Entry
@@ -132,9 +134,10 @@ func (o *Overview) start() tea.Cmd {
 	}
 	o.cls = classify.New(c.Home(), detected)
 
-	sc, err := scan.New(c.Root, scan.Options{Opaque: o.cls.Opaque})
+	sc, err := scan.New(c.Root, scan.Options{Opaque: o.cls.Opaque, First: o.restore})
 	o.sc, o.err = sc, err
 	if err != nil {
+		o.restore = ""
 		return tea.Batch(cmds...)
 	}
 	o.cwd = sc.Root
@@ -143,8 +146,25 @@ func (o *Overview) start() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// Rescan reads the disk again, after something was removed.
-func (o *Overview) Rescan() tea.Cmd { return o.start() }
+// Rescan reads the disk again, after something was removed, and comes back
+// to the folder that was open.
+func (o *Overview) Rescan() tea.Cmd {
+	o.restore = o.surviving(o.cwdPath())
+	return o.start()
+}
+
+// surviving is path, or the nearest folder above it that still exists: the
+// open folder itself may be what was removed. It is "" for the root, where
+// a rescan starts anyway.
+func (o *Overview) surviving(path string) string {
+	root := filepath.Clean(o.c.Root)
+	for p := filepath.Clean(path); p != root && len(p) > len(root); p = filepath.Dir(p) {
+		if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
 
 // Close stops the scan.
 func (o *Overview) Close() {
@@ -157,6 +177,9 @@ func (o *Overview) Title() string { return o.c.Tilde(o.cwdPath()) }
 func (o *Overview) Typing() bool  { return o.searching }
 
 func (o *Overview) cwdPath() string {
+	if o.restore != "" {
+		return o.restore
+	}
 	if o.cwd == nil {
 		return o.c.Root
 	}
@@ -212,6 +235,11 @@ func (o *Overview) match(name string) bool {
 }
 
 func (o *Overview) rebuildFolders() {
+	if o.restore != "" {
+		// Not there yet: show nothing rather than the top folder.
+		o.rows = nil
+		return
+	}
 	keep := ""
 	if o.cur < len(o.rows) {
 		keep = o.rows[o.cur].path
@@ -360,6 +388,16 @@ func (o *Overview) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		o.ticks++
 		o.prog = o.sc.Progress()
+		if o.restore != "" {
+			if d := o.sc.Lookup(o.restore); d != nil {
+				o.cwd, o.restore = d, ""
+				o.rebuild()
+			} else if o.prog.Done {
+				// The scan never entered it: stay at the top.
+				o.restore = ""
+				o.rebuild()
+			}
+		}
 		switch {
 		case o.prog.Done && !o.wasDone:
 			o.wasDone = true

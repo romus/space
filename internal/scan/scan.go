@@ -93,6 +93,9 @@ type Options struct {
 	Opaque func(path, name string) bool
 	// Workers is the number of parallel walkers; 0 picks a default.
 	Workers int
+	// First is a folder inside the root to reach before anything else, so
+	// that it can be shown while the rest is still being read.
+	First string
 }
 
 // Scanner walks one tree.
@@ -136,6 +139,9 @@ func New(root string, opt Options) (*Scanner, error) {
 	}
 	if opt.Workers <= 0 {
 		opt.Workers = max(4, 2*runtime.NumCPU())
+	}
+	if opt.First != "" {
+		opt.First = filepath.Clean(opt.First)
 	}
 	s := &Scanner{
 		Root:    &Dir{Name: root},
@@ -315,7 +321,36 @@ func (s *Scanner) walk(d *Dir) []*Dir {
 	s.mu.Unlock()
 	s.nFiles.Add(ownFiles)
 	add(d, ownSize, ownFiles)
+
+	// The queue is a stack: what goes in last is read next.
+	if name := s.towardsFirst(path); name != "" {
+		for i, c := range todo {
+			if c.Name == name {
+				last := len(todo) - 1
+				todo[i], todo[last] = todo[last], todo[i]
+				break
+			}
+		}
+	}
 	return todo
+}
+
+// towardsFirst names the child of path that leads to Options.First, or ""
+// when path is not on the way there.
+func (s *Scanner) towardsFirst(path string) string {
+	first := s.opt.First
+	if first == "" {
+		return ""
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasSuffix(path, sep) {
+		path += sep
+	}
+	if !strings.HasPrefix(first, path) {
+		return ""
+	}
+	name, _, _ := strings.Cut(first[len(path):], sep)
+	return name
 }
 
 // measure adds up a subtree without keeping it in memory.

@@ -315,6 +315,76 @@ func TestMarkPlanRunMovesToTrash(t *testing.T) {
 	h.want("Folders", "by size on disk")
 }
 
+// Coming back from a removal the folder that was open is open again, not
+// the folder space was started in.
+func TestAfterRemovingYouStayInTheFolder(t *testing.T) {
+	h := newHarness(t, theme.Dark)
+	home := h.app.c.Paths.Home
+
+	h.cursorTo("Downloads")
+	h.key("right")
+	h.cursorToName("small.txt")
+	h.key("space", "enter", "enter")
+	h.want("Moved", "to the Trash")
+	if _, err := os.Stat(filepath.Join(home, "Downloads/small.txt")); !os.IsNotExist(err) {
+		t.Fatal("the file should be gone from Downloads")
+	}
+
+	h.key("enter")                     // back to overview, rescan
+	h.wantNot("Movies/", "Documents/") // not even before the scan gets there
+	h.settle()
+	h.want("space  ~/Downloads/", "installer.dmg")
+	h.wantNot("Movies/", "small.txt")
+
+	// It is the real folder, not a picture of it: left goes up from here.
+	h.key("left")
+	h.want("Movies/", "Downloads/")
+}
+
+func TestAfterRemovingDeepInsideYouStayThere(t *testing.T) {
+	h := newHarness(t, theme.Dark)
+
+	h.cursorTo("Projects")
+	h.key("right")
+	h.cursorToName("web")
+	h.key("right")
+	h.cursorToName("node_modules")
+	h.key("right")
+	h.want("space  ~/Projects/web/node_modules/", "lib/")
+	h.key("space", "enter", "enter")
+	h.want("Done", "back to overview")
+
+	h.key("enter")
+	h.settle()
+	h.want("space  ~/Projects/web/node_modules/", "This folder is empty")
+	h.wantNot("lib/")
+}
+
+// The open folder itself can be what was removed: mark it, step inside,
+// run. Then the nearest folder that is still there opens.
+func TestAfterRemovingTheOpenFolderYouLandInItsParent(t *testing.T) {
+	h := newHarness(t, theme.Dark)
+	home := h.app.c.Paths.Home
+
+	h.cursorTo("Projects")
+	h.key("right")
+	h.cursorToName("data")
+	h.key("space")
+	h.cursorToName("data")
+	h.key("right")
+	h.want("space  ~/Projects/data/", "stuck.bin")
+	h.key("enter", "enter")
+	h.want("Moved", "to the Trash")
+	if _, err := os.Stat(filepath.Join(home, "Projects/data")); !os.IsNotExist(err) {
+		t.Fatal("the folder should be gone")
+	}
+
+	h.key("enter")
+	h.settle()
+	h.want("space  ~/Projects/", "free.bin", "web/")
+	h.wantNot("data/", "Movies/")
+}
+
 // ○ marks a folder that cannot be removed whole. What is inside it is
 // ordinary: it can be marked and removed like anything else.
 func TestProtectedFoldersKeepTheCircleButNotTheirContents(t *testing.T) {

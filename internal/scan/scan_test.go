@@ -256,3 +256,49 @@ func TestNewRejectsFiles(t *testing.T) {
 		t.Fatal("a missing path")
 	}
 }
+
+// With First set the walk heads for that folder: at every level the child
+// leading to it is queued last, which is what the stack hands out next.
+func TestFirstIsReachedBeforeTheRest(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"a", "b", "c", "d"} {
+		mkfile(t, filepath.Join(root, d, "x/y/file.bin"), 1*mb)
+		mkfile(t, filepath.Join(root, d, "z/file.bin"), 1*mb)
+	}
+	first := filepath.Join(root, "b/x/y")
+
+	s, err := New(root, Options{First: first + "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := s.Root
+	for _, want := range []string{"b", "x", "y"} {
+		todo := s.walk(d)
+		if len(todo) == 0 || todo[len(todo)-1].Name != want {
+			t.Fatalf("after %s the next folder must be %q, got %v", d.Path(), want, names(todo))
+		}
+		d = todo[len(todo)-1]
+	}
+	if got := s.Lookup(first); got != d {
+		t.Fatalf("Lookup(%s) = %v, want the folder just reached", first, got)
+	}
+	// Off the way nothing is reordered, and a name that only starts the
+	// same is not on the way.
+	if s.towardsFirst(filepath.Join(root, "a")) != "" || s.towardsFirst(filepath.Join(root, "b/x/y")) != "" {
+		t.Fatal("a folder off the way, or First itself, leads nowhere")
+	}
+
+	// The order changes, the numbers do not.
+	plain := scanDir(t, root, Options{})
+	headed := scanDir(t, root, Options{First: first})
+	if plain.Root.Size() != headed.Root.Size() || plain.Root.Files() != headed.Root.Files() {
+		t.Fatalf("First changed the totals: %d/%d against %d/%d",
+			headed.Root.Size(), headed.Root.Files(), plain.Root.Size(), plain.Root.Files())
+	}
+	if headed.Lookup(first) == nil {
+		t.Fatal("Lookup did not find First after a full scan")
+	}
+}

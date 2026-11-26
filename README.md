@@ -37,7 +37,7 @@ Intel, with shell completions. Or [build it yourself](#building).
    | Mark | Meaning | What happens |
    | --- | --- | --- |
    | `·` | plain files | moved to the Trash |
-   | `●` | cache | deleted; it will be rebuilt |
+   | `●` | cache | moved to the Trash; safe to delete with `D`, it will be rebuilt |
    | `◆` | owned by a recipe | the recipe runs the right commands in the right order |
    | `○` | protected folder | cannot be removed whole: open it and pick inside |
 

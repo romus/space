@@ -1,6 +1,7 @@
-// Package trash is the plain way of removing things: marked files and
-// folders go to the Trash, caches are deleted outright. It is not shown on
-// the Recipes tab; it is what "enter" on marked rows turns into.
+// Package trash is the plain way of removing things: marked files, folders
+// and caches go to the Trash, or are deleted outright when that is asked
+// for. It is not shown on the Recipes tab; it is what "enter" on marked rows
+// turns into.
 package trash
 
 import (
@@ -16,6 +17,10 @@ const ID = "trash"
 
 // Plan builds the steps for a set of marked items. root is the folder being
 // scanned: nothing outside it is ever removed.
+//
+// Everything goes to the Trash, caches included, so the default is always
+// reversible. With permanent the items are deleted instead: plain ones as an
+// irreversible step, caches as a safe one, since they are rebuilt.
 func Plan(items []recipe.Item, root string, permanent bool) (recipe.Plan, error) {
 	if len(items) == 0 {
 		return recipe.Plan{}, fmt.Errorf("nothing is marked")
@@ -35,20 +40,27 @@ func Plan(items []recipe.Item, root string, permanent bool) (recipe.Plan, error)
 	}
 
 	p := recipe.Plan{RecipeID: ID, Title: "Remove"}
+	p.Seconds = 1 + len(items)/50
+	if !permanent {
+		// items is already sorted by size and holds only plain and cache.
+		r := &recipe.Remove{Paths: paths(items), ToTrash: true, Root: root, Bytes: recipe.Sum(items)}
+		p.Steps = append(p.Steps, recipe.Step{
+			Title:      fmt.Sprintf("Move %s to the Trash", noun(len(items))),
+			Why:        fmt.Sprintf("%s. Space comes back when you empty the Trash.", humanize.Bytes(r.Bytes)),
+			Remove:     r,
+			Reversible: true,
+		})
+		p.ToTrash = r.Bytes
+		return p, nil
+	}
 	if len(plain) > 0 {
-		r := &recipe.Remove{Paths: paths(plain), ToTrash: !permanent, Root: root, Bytes: recipe.Sum(plain)}
-		step := recipe.Step{Remove: r}
-		if permanent {
-			step.Title = fmt.Sprintf("Delete %s forever", noun(len(plain)))
-			step.Why = fmt.Sprintf("%s. This cannot be undone.", humanize.Bytes(r.Bytes))
-			p.Reclaim += r.Bytes
-		} else {
-			step.Title = fmt.Sprintf("Move %s to the Trash", noun(len(plain)))
-			step.Why = fmt.Sprintf("%s. Space comes back when you empty the Trash.", humanize.Bytes(r.Bytes))
-			step.Reversible = true
-			p.ToTrash += r.Bytes
-		}
-		p.Steps = append(p.Steps, step)
+		r := &recipe.Remove{Paths: paths(plain), Root: root, Bytes: recipe.Sum(plain)}
+		p.Steps = append(p.Steps, recipe.Step{
+			Title:  fmt.Sprintf("Delete %s forever", noun(len(plain))),
+			Why:    fmt.Sprintf("%s. This cannot be undone.", humanize.Bytes(r.Bytes)),
+			Remove: r,
+		})
+		p.Reclaim += r.Bytes
 	}
 	if len(caches) > 0 {
 		r := &recipe.Remove{Paths: paths(caches), Root: root, Bytes: recipe.Sum(caches)}
@@ -60,7 +72,6 @@ func Plan(items []recipe.Item, root string, permanent bool) (recipe.Plan, error)
 		})
 		p.Reclaim += r.Bytes
 	}
-	p.Seconds = 1 + len(items)/50
 	return p, nil
 }
 

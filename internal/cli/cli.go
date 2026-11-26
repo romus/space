@@ -124,7 +124,7 @@ func Execute(build Build) int {
 		Use:   "space [path]",
 		Short: "See what takes up your Mac's disk and clean it safely",
 		Long: "space shows folders and files by the room they take on disk, and removes them the right way:\n" +
-			"plain files go to the Trash, caches are deleted, and things that cannot simply be deleted —\n" +
+			"files and caches go to the Trash unless you ask to delete them, and things that cannot simply be deleted —\n" +
 			"a Podman machine, Claude Code or Codex sessions — get a recipe with the right order of commands.\n\n" +
 			"Nothing runs without a plan, and the plan is exactly what will run.\n\n" +
 			"space opens the folder you start it in. Give a path to open another one:\n" +

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -301,13 +302,10 @@ func (r *Recipe) Inspect(ctx context.Context) ([]recipe.Item, error) {
 	}
 	r.status.Active = st.Active
 
-	for _, im := range images {
+	for _, im := range mergeImages(images) {
 		title := "<none>:<none>"
-		switch {
-		case len(im.Names) > 0:
+		if len(im.Names) > 0 {
 			title = im.Names[0]
-		case len(im.RepoTags) > 0:
-			title = im.RepoTags[0]
 		}
 		it := recipe.Item{
 			ID:      im.ID,
@@ -317,6 +315,9 @@ func (r *Recipe) Inspect(ctx context.Context) ([]recipe.Item, error) {
 			Kind:    recipe.Special,
 			ModTime: time.Unix(int64(im.Created), 0),
 			Meta:    map[string]string{"id": short(im.ID)},
+		}
+		if len(im.Names) > 1 {
+			it.Meta["tags"] = strings.Join(im.Names, ",")
 		}
 		switch {
 		case running[im.ID] != "":
@@ -374,6 +375,46 @@ func (r *Recipe) Inspect(ctx context.Context) ([]recipe.Item, error) {
 		return a.Bytes > b.Bytes
 	})
 	return items, nil
+}
+
+// mergeImages folds the entries podman prints for one image into one.
+// "podman images --format json" repeats an image once for each of its tags,
+// so without this an image with two tags would be listed, counted and
+// removed twice. Names holds every name the image goes by.
+func mergeImages(list []imageJSON) []imageJSON {
+	var out []imageJSON
+	at := map[string]int{}
+	for _, im := range list {
+		i, seen := at[im.ID]
+		if !seen {
+			i = len(out)
+			at[im.ID] = i
+			names, tags := im.Names, im.RepoTags
+			im.Names, im.RepoTags = nil, nil
+			out = append(out, im)
+			im.Names, im.RepoTags = names, tags
+		}
+		out[i].Names = addNames(out[i].Names, im.Names)
+		out[i].RepoTags = addNames(out[i].RepoTags, im.RepoTags)
+	}
+	for i := range out {
+		// RepoTags only stand in when podman gave no names at all: mixing
+		// the two could make one tag look like two.
+		if len(out[i].Names) == 0 {
+			out[i].Names = out[i].RepoTags
+		}
+	}
+	return out
+}
+
+// addNames appends the names that are not in the list yet.
+func addNames(list, names []string) []string {
+	for _, n := range names {
+		if n != "" && !slices.Contains(list, n) {
+			list = append(list, n)
+		}
+	}
+	return list
 }
 
 func short(id string) string {
@@ -491,21 +532,47 @@ func (r *Recipe) Plan(sel []recipe.Item, opt recipe.Options) (recipe.Plan, error
 			Title: "Remove " + humanize.Plural(n, "container"), Cmd: cmd, Why: why,
 		})
 	}
+	// An image with several tags is removed by ID only when forced, so
+	// those go in a step of their own and the rest are removed as usual.
+	removed := 0
 	if len(images) > 0 {
-		cmd := []string{"podman", "rmi"}
+		plain := []string{"podman", "rmi"}
+		forced := []string{"podman", "rmi", "--force"}
+		seen := map[string]bool{}
 		for _, im := range images {
-			cmd = append(cmd, short(im.ID))
+			if seen[im.ID] {
+				continue
+			}
+			seen[im.ID] = true
 			freed += im.Bytes
+			if im.Meta["tags"] != "" {
+				forced = append(forced, short(im.ID))
+			} else {
+				plain = append(plain, short(im.ID))
+			}
 		}
-		p.Steps = append(p.Steps,
-			recipe.Step{
-				Title: "Remove " + humanize.Plural(len(images), "image"), Cmd: cmd,
+		if n := len(plain) - 2; n > 0 {
+			removed += n
+			p.Steps = append(p.Steps, recipe.Step{
+				Title: "Remove " + humanize.Plural(n, "image"), Cmd: plain,
 				Why: "Images no container is using.",
-			},
-			recipe.Step{
-				Title: "Clean up dangling layers", Cmd: []string{"podman", "image", "prune", "-f"},
-				Why: "Layers left without an image after the previous step.",
 			})
+		}
+		if n := len(forced) - 3; n > 0 {
+			removed += n
+			why := "Each has more than one tag."
+			if n == 1 {
+				why = "It has more than one tag."
+			}
+			p.Steps = append(p.Steps, recipe.Step{
+				Title: "Remove " + humanize.Plural(n, "image") + " with several tags", Cmd: forced,
+				Why: why + " Podman removes such an image by ID only with --force; all its tags go.",
+			})
+		}
+		p.Steps = append(p.Steps, recipe.Step{
+			Title: "Clean up dangling layers", Cmd: []string{"podman", "image", "prune", "-f"},
+			Why: "Layers left without an image after the previous step.",
+		})
 	}
 	if len(volumes) > 0 {
 		cmd := []string{"podman", "volume", "rm"}
@@ -568,12 +635,8 @@ func (r *Recipe) Plan(sel []recipe.Item, opt recipe.Options) (recipe.Plan, error
 	p.Reclaim = freed
 	p.Seconds = 15 + 5*len(p.Steps)
 	p.Metric = &recipe.Metric{Label: "machine disk on Mac", Before: st.OnDisk, After: max(0, st.OnDisk-freed)}
-	if len(images) > 0 {
-		total := 0
-		for range images {
-			total++
-		}
-		p.Summary = append(p.Summary, fmt.Sprintf("images removed\t%d", total))
+	if removed > 0 {
+		p.Summary = append(p.Summary, fmt.Sprintf("images removed\t%d", removed))
 	}
 	if stop && !start {
 		if len(st.Active) > 0 {

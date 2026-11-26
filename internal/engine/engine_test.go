@@ -121,6 +121,13 @@ func TestFailureStopsThePlan(t *testing.T) {
 	if res.Steps[2].Ran {
 		t.Fatal("step three must not run")
 	}
+	// The failed step keeps what the command said; a step that worked does not.
+	if got := strings.Join(res.Steps[1].Tail, "|"); got != "ran two|second line" {
+		t.Fatalf("tail of the failed step: %q", got)
+	}
+	if len(res.Steps[0].Tail) != 0 {
+		t.Fatalf("a step that worked keeps no tail: %q", res.Steps[0].Tail)
+	}
 }
 
 func TestStopHappensBetweenSteps(t *testing.T) {

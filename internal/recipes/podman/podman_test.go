@@ -278,3 +278,88 @@ func TestStoppedMachine(t *testing.T) {
 		t.Fatalf("the only thing to do is start it: %v %v", cmds(plan), err)
 	}
 }
+
+// Podman lists an image once for each of its tags and refuses to remove it
+// by ID without --force. It must be one row, counted once, in a forced step.
+func TestImageWithSeveralTags(t *testing.T) {
+	replies := running()
+	replies["podman images --format json"] = "images-multitag.json"
+	r, _, _ := setup(t, replies)
+	items, err := r.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var images []recipe.Item
+	for _, it := range items {
+		if it.Group == Images {
+			images = append(images, it)
+		}
+	}
+	if len(images) != 2 {
+		t.Fatalf("two images, one of them with two tags, are two rows: %+v", images)
+	}
+	node := byTitle(items)["images:docker.io/library/node:22-bookworm-slim"]
+	if node.Bytes != 250000000 || !node.Default ||
+		node.Meta["tags"] != "docker.io/library/node:22-bookworm-slim,docker.io/library/node:22-slim" {
+		t.Fatalf("the image with two tags: %+v", node)
+	}
+	if got := byTitle(items)["images:docker.io/library/node:20-bookworm"].Meta["tags"]; got != "" {
+		t.Fatalf("an image with one tag has no tag list: %q", got)
+	}
+	if got := r.Summary(items); got != "1 machine · 2 images · 1 stopped container" {
+		t.Fatalf("summary: %q", got)
+	}
+
+	plan, err := r.Plan(images, recipe.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cmds(plan)
+	want := []string{"podman rmi c81f2e4d9a07", "podman rmi --force 4e6c5a55f01d", "podman image prune -f"}
+	if strings.Join(got[:3], "\n") != strings.Join(want, "\n") {
+		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if plan.Steps[0].Title != "Remove 1 image" || plan.Steps[1].Title != "Remove 1 image with several tags" {
+		t.Fatalf("titles: %q, %q", plan.Steps[0].Title, plan.Steps[1].Title)
+	}
+	if !strings.Contains(plan.Steps[1].Why, "--force") || plan.Steps[1].Tag() != "IRREVERSIBLE" {
+		t.Fatalf("the forced step should say why: %q (%s)", plan.Steps[1].Why, plan.Steps[1].Tag())
+	}
+	if plan.Reclaim != 1350000000 || plan.Summary[0] != "images removed\t2" {
+		t.Fatalf("reclaim %d, summary %q", plan.Reclaim, plan.Summary)
+	}
+
+	// Only the image with several tags, even if it is handed over twice.
+	plan, err = r.Plan([]recipe.Item{node, node}, recipe.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cmds(plan); got[0] != "podman rmi --force 4e6c5a55f01d" || got[1] != "podman image prune -f" {
+		t.Fatalf("steps: %v", got)
+	}
+	if plan.Reclaim != 250000000 {
+		t.Fatalf("the image is counted once: %d", plan.Reclaim)
+	}
+}
+
+func TestMergeImages(t *testing.T) {
+	// One entry per tag, each naming only its own tag.
+	got := mergeImages([]imageJSON{
+		{ID: "aaa", Names: []string{"a:1"}, Size: 10},
+		{ID: "bbb", RepoTags: []string{"b:1"}},
+		{ID: "aaa", Names: []string{"a:2"}, Size: 10},
+		{ID: "ccc"},
+	})
+	if len(got) != 3 || strings.Join(got[0].Names, ",") != "a:1,a:2" || got[0].Size != 10 {
+		t.Fatalf("merged: %+v", got)
+	}
+	// RepoTags stand in only when there are no names.
+	if strings.Join(got[1].Names, ",") != "b:1" || len(got[2].Names) != 0 {
+		t.Fatalf("names: %+v", got)
+	}
+	// The same tag under both keys is still one tag.
+	one := mergeImages([]imageJSON{{ID: "ddd", Names: []string{"d:1"}, RepoTags: []string{"docker.io/library/d:1"}}})
+	if len(one[0].Names) != 1 {
+		t.Fatalf("one tag must not look like two: %+v", one[0])
+	}
+}

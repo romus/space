@@ -33,7 +33,7 @@ type Done struct {
 func NewDone(c *Ctx, spec PlanSpec, res engine.Result) *Done {
 	d := &Done{c: c, spec: spec, res: res}
 	d.vol, _ = scan.VolumeOf(c.Root)
-	if res.Failed < 0 && !res.Stopped {
+	if res.Failed < 0 && !res.Stopped && len(res.FailedGroups()) == 0 {
 		d.actions = append(d.actions, spec.Plan.After...)
 	}
 	if res.Trashed > 0 {
@@ -79,6 +79,9 @@ func (d *Done) Lines() []string {
 	glyph, gc := "✓", t.Safe
 	title := "Done"
 	sub := fmt.Sprintf("%s · %s", humanize.Plural(res.Done(), "step"), humanize.Duration(res.Elapsed))
+	if len(res.Groups) > 0 {
+		sub = groupSub(res)
+	}
 	var notes []kit.Span
 	note := func(s string) { notes = append(notes, kit.Sp(muted, s)) }
 	switch {
@@ -95,12 +98,15 @@ func (d *Done) Lines() []string {
 		if len(said) > 0 {
 			note("The full output is in the log — press l.")
 		}
-		if res.Failed > 0 {
-			note(fmt.Sprintf("The %s before it ran and stay done.", humanize.Plural(res.Failed, "step")))
+		if n := res.Done(); n > 0 {
+			note(fmt.Sprintf("The %s before it ran and stay done.", humanize.Plural(n, "step")))
 		}
 	case res.Stopped:
 		glyph, gc = "■", t.Muted
 		title = fmt.Sprintf("Stopped after step %d of %d", res.Done(), len(res.Plan.Steps))
+		if len(res.Groups) > 0 {
+			title = groupStopped(res)
+		}
 	case float64(reclaimed) > noise:
 		title = "Reclaimed " + humanize.Bytes(reclaimed)
 	case res.Trashed > 0:
@@ -114,6 +120,13 @@ func (d *Done) Lines() []string {
 	if len(failures) > 0 && !removed && res.Failed < 0 && !res.Stopped {
 		glyph, gc = "✗", t.Danger
 		title = "Nothing was removed"
+	}
+	if len(res.FailedGroups()) > 0 && res.Failed < 0 && !res.Stopped {
+		// Part of the work is done; the block below says what is not.
+		glyph, gc = "!", t.Danger
+		if res.FinishedGroups() == 0 {
+			glyph, title = "✗", "No "+res.Plan.Noun()+" was finished"
+		}
 	}
 	if res.Trashed > 0 {
 		note("Space comes back when the Trash is emptied — press e.")
@@ -173,6 +186,7 @@ func (d *Done) Lines() []string {
 				kit.Sp(muted, fmt.Sprintf("+%d more — press l for the log", n-show))))
 		}
 	}
+	block = append(block, d.groupFailures()...)
 	block = append(block, kit.Blank(t, w))
 
 	// Free space before and after, on one scale.

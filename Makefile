@@ -19,7 +19,7 @@ ARCHIVE := space-$(VERSION)-macos-universal.tar.gz
 CONFIG_DIR = $${XDG_CONFIG_HOME:-$$HOME/.config}/space
 STATE_DIR  = $${XDG_STATE_HOME:-$$HOME/.local/state}/space
 
-.PHONY: build install uninstall uninstall-all dist formula test lint fmt fixture run clean
+.PHONY: build install uninstall uninstall-all dist formula test race lint fmt fixture run clean
 
 install: build ## install space into $(PREFIX)/bin
 	install -d "$(BINDIR)"
@@ -69,6 +69,9 @@ formula: ## render the Homebrew formula for the archive in dist/
 
 test: ## run every test
 	go test ./...
+
+race: ## run the tests of everything that runs side by side under the race detector
+	go test -race ./internal/engine ./internal/ui/screens
 
 lint: ## vet and check formatting
 	go vet -composites=false ./...

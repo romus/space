@@ -460,7 +460,7 @@ func (o *Overview) recipesView() (body, bottom []string) {
 	}
 	if len(list) == 0 {
 		body = append(body, kit.Blank(t, w), kit.Row(w, t.Base(), []kit.Span{
-			kit.Sp(t.S(t.Muted), "  Nothing here needs a recipe: no Podman machine, no Claude Code or Codex sessions."),
+			kit.Sp(t.S(t.Muted), "  Nothing here needs a recipe: no Podman machine, no Git repositories, no Claude Code or Codex sessions."),
 		}, nil))
 	}
 

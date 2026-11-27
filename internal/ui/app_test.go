@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -720,5 +721,105 @@ func TestRunFinishesWhateverOrderTheMessagesArrive(t *testing.T) {
 	h.wantNot("Running")
 	if _, err := os.Stat(filepath.Join(home, ".Trash/recording.mov")); err != nil {
 		t.Fatal("the file should be in the Trash:", err)
+	}
+}
+
+// gitRepo builds a small repository with real git: a merged branch that
+// can go, a branch that exists only here, and a stash.
+func gitRepo(t *testing.T, dir string) {
+	t.Helper()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := func(name, text string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git("add", name)
+	}
+	git("init", "-q", "-b", "main")
+	file("readme", "one\n")
+	git("commit", "-q", "-m", "one")
+	git("checkout", "-q", "-b", "fix/login")
+	file("fix", "fixed\n")
+	git("commit", "-q", "-m", "fix")
+	git("checkout", "-q", "main")
+	git("merge", "-q", "--ff-only", "fix/login")
+	git("checkout", "-q", "-b", "wip/idea")
+	file("idea", "idea\n")
+	git("commit", "-q", "-m", "idea")
+	git("checkout", "-q", "main")
+	file("readme", "changed\n")
+	git("stash", "-q")
+}
+
+// The whole way through the interface, on real repositories: the Git
+// recipe finds them, plans the same steps in each, runs them side by side
+// and reports per repository.
+func TestGitRecipeCleansRepositories(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, who := range []string{"AUTHOR", "COMMITTER"} {
+		t.Setenv("GIT_"+who+"_NAME", "Test")
+		t.Setenv("GIT_"+who+"_EMAIL", "test@example.com")
+	}
+	var work string
+	h := newHarnessAt(t, theme.Dark, func(home string) string {
+		work = filepath.Join(home, "work")
+		gitRepo(t, filepath.Join(work, "web"))
+		gitRepo(t, filepath.Join(work, "api"))
+		return work
+	})
+	branches := func(repo string) string {
+		out, err := exec.Command("git", "-C", filepath.Join(work, repo), "for-each-ref", "--format=%(refname:short)", "refs/heads").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(string(out)), " ")
+	}
+
+	h.key("tab", "tab")
+	h.want("Git", "2 repositories · 2 branches to remove")
+	h.key("down", "enter") // the first recipe in the sandbox is Claude Code
+	h.want("◆ Git · ~/work", "2 repositories found", "keep    main master develop",
+		"[✓] web", "1 of 3", "1 branch only here · kept", "2 repos · 2 branches")
+	t.Log("\n" + h.screen())
+
+	// One repository: what stays, what goes, and what is never picked.
+	h.key("right")
+	h.want("Local 3", "kept · default", "[✓] fix/login", "merged into main", "[ ] wip/idea", "only here · 1 commit")
+	h.key("esc")
+
+	h.key("enter")
+	h.want("Same 3 steps in each of 2 repos", "4 at a time", "Delete branches  2 in total",
+		"Forget old history", "IRREVERSIBLE", "Compact", "run in 2 repos")
+	t.Log("\n" + h.screen())
+	h.key("enter")
+	h.want("this cannot be undone — press enter again")
+	if got := branches("web"); got != "fix/login main wip/idea" {
+		t.Fatalf("nothing may run before the second enter: %s", got)
+	}
+	h.key("enter")
+	h.want("Done", "2 repos · 6 steps", "repositories", "branches deleted")
+	t.Log("\n" + h.screen())
+
+	for _, repo := range []string{"web", "api"} {
+		if got := branches(repo); got != "main wip/idea" {
+			t.Fatalf("%s: branches left: %s", repo, got)
+		}
+		out, _ := exec.Command("git", "-C", filepath.Join(work, repo), "stash", "list").Output()
+		if strings.Count(string(out), "stash@") != 1 {
+			t.Fatalf("%s: the stash must survive: %q", repo, out)
+		}
 	}
 }

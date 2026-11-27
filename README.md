@@ -65,10 +65,38 @@ A recipe handles what you cannot simply delete.
 | Podman | `~/.local/share/containers` | removes the images, containers and volumes you pick, runs `fstrim` inside the machine so macOS learns which blocks are free, then stops the machine and starts it again |
 | Claude Code | `~/.claude` | moves sessions you have not used for a while to the Trash, with their sub-agent logs and file checkpoints |
 | Codex | `~/.codex` | moves old session rollouts to the Trash and deletes old logs |
+| Git | the repositories under the folder you opened | deletes the branches that are merged, gone on origin or pushed, then forgets them in the reflog and compacts `.git`, the same steps in every repository, four repositories at a time |
 
 The agent recipes work from an allow-list. Settings, `CLAUDE.md`, memory,
 skills, plugins, `config.toml`, `auth.json` and the sqlite databases are never
 touched, and neither is a session that is open right now.
+
+### Git
+
+Deleting a branch frees almost nothing by itself: its commits stay in `.git`
+until the reflog forgets them and the repository is repacked. The Git recipe
+does all of it in one plan.
+
+- **What stays.** The main branch, the branch that is checked out, a branch
+  checked out in a worktree, and the names in the rule (`main master develop`
+  out of the box; edit it with `e`, patterns like `release/*` work). A branch
+  with commits that exist nowhere else is never picked for you.
+- **What is skipped.** A repository with uncommitted changes, a detached
+  HEAD, or a rebase or merge in progress is left alone entirely.
+- **Backups.** Branches that are not merged are saved to a bundle in
+  `~/.local/state/space/git` first and kept for 30 days. The bundle holds
+  what it saves, so that part of the space comes back when it goes. The log
+  keeps the commit of every deleted branch.
+- **Never touched.** Branches on the remote, stashes, tags, working files.
+- **Origin.** The interface asks origin which branches it still has
+  (`git ls-remote`, nothing is fetched) to find stale `origin/*` refs. The
+  command line never uses the network.
+- **Other people's repositories.** Every git command runs with the
+  repository's hooks and file system monitor switched off, so looking at a
+  folder never runs code that came with it.
+
+Repositories in hidden folders, bare repositories and submodules are not
+listed. Inside a repository, `space` goes straight to its branches.
 
 > The Podman recipe is tested against recorded command output only. It has
 > not yet been run against a real Podman machine.
@@ -85,6 +113,7 @@ space --theme system|light|dark
 space recipe                    list the recipes found on this Mac
 space recipe claude --dry-run   show a plan and change nothing
 space recipe claude             show the plan, ask, then run it
+space recipe git -p ~/work      the Git plan for the repositories under ~/work
 space plan --script > clean.sh  every plan, as a shell script
 ```
 
@@ -127,7 +156,8 @@ theme = "system"
 | Path | What |
 | --- | --- |
 | `~/.config/space/config.toml` | your settings; space only reads it |
-| `~/.local/state/space/state.json` | the theme picked with `t`, pinned projects, hidden recipes |
+| `~/.local/state/space/state.json` | the theme picked with `t`, pinned projects, hidden recipes, the Git rule |
+| `~/.local/state/space/git/` | bundles of the branches the Git recipe deleted, kept 30 days |
 | `~/.local/state/space/YYYY-MM-DD.log` | every plan that ran, with the output of each step |
 
 ## Full Disk Access
@@ -168,7 +198,7 @@ pkg/recipe          the recipe contract
 internal/scan       parallel disk scanner
 internal/classify   which path is removed how
 internal/engine     runs plans: the only code that changes the disk
-internal/recipes    trash, podman, agents (Claude Code, Codex)
+internal/recipes    trash, podman, git, agents (Claude Code, Codex)
 internal/ui         theme, drawing kit, screens
 internal/cli        commands
 ```

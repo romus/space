@@ -4,6 +4,7 @@ package screens
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/romus/space/internal/engine"
 	"github.com/romus/space/internal/humanize"
 	"github.com/romus/space/internal/recipes/agents"
+	"github.com/romus/space/internal/recipes/git"
 	"github.com/romus/space/internal/recipes/podman"
 	"github.com/romus/space/internal/recipes/trash"
 	"github.com/romus/space/internal/scan"
@@ -193,6 +195,18 @@ func (o *Overview) state(id string) *RecipeState {
 		}
 	}
 	return nil
+}
+
+// forget drops a recipe that found nothing in this folder.
+func (o *Overview) forget(id string) {
+	out := o.recipes[:0:0]
+	for _, rs := range o.recipes {
+		if rs.R.ID() != id {
+			out = append(out, rs)
+		}
+	}
+	o.recipes = out
+	o.rcur = min(o.rcur, max(0, len(o.visibleRecipes())-1))
 }
 
 // visibleRecipes are the recipes shown on the Recipes tab.
@@ -409,6 +423,10 @@ func (o *Overview) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			o.rebuild()
 		}
 	case recipeLoadedMsg:
+		if errors.Is(msg.err, recipe.ErrNothingHere) {
+			o.forget(msg.id) // it applies to this Mac, but not to this folder
+			break
+		}
 		if rs := o.state(msg.id); rs != nil {
 			rs.Items, rs.Err, rs.Loaded = msg.items, msg.err, true
 		}
@@ -769,6 +787,8 @@ func (o *Overview) openRecipe(id string) tea.Cmd {
 	switch id {
 	case podman.ID:
 		return push(NewPodman(o.c, rs))
+	case git.ID:
+		return push(NewGit(o.c, rs))
 	case agents.ClaudeID, agents.CodexID:
 		var list []*RecipeState
 		for _, s := range o.recipes {

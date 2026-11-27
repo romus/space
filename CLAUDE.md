@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 make build    # ./space (CGO off, version stamped through -ldflags)
 make test     # go test ./...
+make race     # the engine and screen tests under the race detector
 make lint     # go vet -composites=false ./... and a gofmt check
 make fmt      # gofmt -w .
 make run      # build, create a throwaway home in /tmp/space-home, run space on it
@@ -24,20 +25,20 @@ Requires Go 1.27+. Almost every package carries `//go:build darwin`; new files t
 
 ### Never try removal on the real home
 
-`SPACE_HOME=<dir>` replaces the home directory entirely: space opens it by default, looks for `.claude` and `.codex` inside it, ignores `XDG_*`, keeps config and state under it, and moves files to `<dir>/.Trash` instead of calling `/usr/bin/trash`. `hack/mkfixture.sh <dir>` fills such a folder with test data (sparse file, hard link, Claude Code and Codex sessions). Use both (or `make run`) for any manual run that deletes; tests do the same with `t.Setenv("SPACE_HOME", t.TempDir())`.
+`SPACE_HOME=<dir>` replaces the home directory entirely: space opens it by default, looks for `.claude` and `.codex` inside it, ignores `XDG_*`, keeps config and state under it, and moves files to `<dir>/.Trash` instead of calling `/usr/bin/trash`. `hack/mkfixture.sh <dir>` fills such a folder with test data (sparse file, hard link, Claude Code and Codex sessions, Git repositories with their origins). Use both (or `make run`) for any manual run that deletes; tests do the same with `t.Setenv("SPACE_HOME", t.TempDir())`.
 
 ## Architecture
 
 The flow is always: **find → plan → show → run**. Nothing changes the disk without a `recipe.Plan` that was shown first.
 
 - `pkg/recipe` is the contract. A `Recipe` only detects, inspects and returns a `Plan` made of `Step`s; it never deletes. A step is either `Cmd` (argv) or `Remove` (paths the engine deletes itself, inside `Root`). The step's tag (READ-ONLY / SAFE / REVERSIBLE / IRREVERSIBLE) is derived from its flags and drives the double confirmation.
-- `internal/engine` is the only code that changes the disk. `Engine.Run` executes steps in order, streams output as events, writes the daily log, and measures free space before and after. Its removal checks are the safety net for everything above it: the root may not be `/` or anything above the home directory, each path must resolve strictly inside the root, and a path whose inode changed since `engine.Prepare` is refused. Call `engine.Prepare(&plan)` whenever a plan is built or rebuilt before showing it. A path that cannot be removed becomes a `Failure` and does not stop the rest; only a failing command or a refused root fails the step and ends the run.
+- `internal/engine` is the only code that changes the disk. `Engine.Run` executes steps in order, streams output as events, writes the daily log, and measures free space before and after. Steps that share a `Step.Group` are one group (one repository): groups that follow one another run side by side, `Plan.Parallel` at a time, each in its own order, and a failing command ends its own group only (`Result.Groups`, not `Result.Failed`). Everything a run reports goes through `sink` under one lock, so `emit` is never called by two goroutines. A step in a group may not use sudo. Its removal checks are the safety net for everything above it: the root may not be `/` or anything above the home directory, each path must resolve strictly inside the root, and a path whose inode changed since `engine.Prepare` is refused. Call `engine.Prepare(&plan)` whenever a plan is built or rebuilt before showing it. A path that cannot be removed becomes a `Failure` and does not stop the rest; only a failing command or a refused root fails the step and ends the run.
 - `engine.Script` and `engine.Display` render the same steps as a shell script or one line, so the plan screen, `--dry-run`, "copy as script" and the log always show what will run. `engine.Reader` is the read-only command runner handed to recipes through `recipe.Env`.
 - `internal/scan` walks the tree in parallel. Size is always `st_blocks × 512` (what is taken on disk, not file length); hard links count once, other volumes are not entered, iCloud placeholders are not downloaded. Only directories stay in memory; files are listed on demand and the largest are kept in a heap.
 - `internal/classify` decides how a path is removed: plain (Trash), cache (Trash too; deleted with `D` as a SAFE step), special (owned by a detected recipe, including the parent folders that lead to it), or protected (`○`: the folder cannot be removed whole, everything inside it can). Recipes are detected before the classifier is built because it needs the folders they own.
-- `internal/recipes`: `podman` and `agents` (Claude Code, Codex) register themselves in `init()` through `recipe.Register`. `trash` is not a registered recipe: it is the plan builder behind marked rows on the overview. The agent recipes work from an allow-list of what may be offered; anything unrecognised is never touched, and sessions that are open are locked.
+- `internal/recipes`: `podman`, `git` and `agents` (Claude Code, Codex) register themselves in `init()` through `recipe.Register`. `git` works on the folder space was opened on (`recipe.Env.Root`), not on the home directory: it returns `recipe.ErrNothingHere` from `Inspect` when there is no repository below, and the overview then drops it. It has no `Info().Path`, so repositories stay ordinary folders. Every git command is built in `git/cmd.go` with the repository's hooks and fsmonitor switched off; keep it that way, the test with real git checks it. Only the screen asks origin (`CheckRemote`); `Inspect` and the CLI never use the network. `trash` is not a registered recipe: it is the plan builder behind marked rows on the overview. The agent recipes work from an allow-list of what may be offered; anything unrecognised is never touched, and sessions that are open are locked.
 - `internal/cli` (cobra): the root command starts the UI; `recipe`, `plan` and `version` work without it and share `planFor` for the default selection.
-- `internal/config`: `config.toml` is read only; `state.json` (theme picked with `t`, keep window, pinned projects, hidden recipes) is what space writes.
+- `internal/config`: `config.toml` is read only; `state.json` (theme picked with `t`, keep window, pinned projects, hidden recipes, the Git keep rule) is what space writes.
 
 ### Adding a recipe
 
@@ -50,6 +51,7 @@ Implement `recipe.Recipe`, register it in `init()`, and keep the `recipe.Env` gi
 - A screen that waits for background work implements `Starter`; the app calls `Start` only after the screen is on the stack. The run screen depends on this: reading engine events earlier races with the screen switch and the run looks stuck.
 - Colours come only from `theme.Theme` fields through `t.Base()`, `t.S()`, `t.Sel()`, `t.Soft()`, never hex values in screens. These helpers also carry the window background and the `NO_COLOR` path (reverse video for the selection; the glyphs `· ● ◆ ○` carry the meaning).
 - Theme `system` means the terminal's own background, asked over OSC 11. space paints the background itself, so the probe in `app.go` resets it, asks, and paints again in one write. The fallback is the macOS appearance, then dark. Precedence of the setting: `--theme`, `SPACE_THEME`, `config.toml`, `state.json`.
+- A plan with groups is drawn folded: `plan_fold.go` and `plan_groups.go` (each kind of step once, `→` opens one group), `run_groups*.go` (one row per group), `done_groups.go`. A plan without groups is drawn exactly as before; `plan.golden` guards that.
 - Screen order for any removal: Overview or a recipe screen → `Plan` → `Run` → `Done`, all carrying one `PlanSpec` (`Rebuild` re-plans after a toggle, `Measure` reads the recipe's own number). Editing a command on the plan screen drops `Rebuild`: the plan is no longer the recipe's.
 
 ## Versioning and release

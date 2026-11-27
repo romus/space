@@ -1,0 +1,29 @@
+space  Recipes › ◆ Git · ~/work                                                                   3 repositories found
+
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ keep    main master develop  +  the main and current branch  +  anything not pushed                    e edit rule │
+│ also    p [✓] prune stale origin refs    c [✓] compact .git    b [✓] back up what is not merged                    │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+    REPOSITORY                    .GIT  BRANCHES OUT   RECLAIM ≈   NOTE
+[✓] web                           2 MB       7 of 11      780 MB   1 branch only here · kept · 2 stale origin refs
+[✓] api                          98 KB        0 of 2         0 B   1 branch only here · kept
+ ○  legacy                        1 MB             —           —   uncommitted changes · skipped
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Deleting a branch alone frees almost nothing: its commits stay in .git until the reflog expires.
+The plan deletes, expires and compacts in one go. Backups keep unmerged work for 30 days, and its space too.
+
+␣ include repo  → its branches  e rule  esc back                             2 repos · 7 branches · ≈ 780 MB  ▏⏎▕ plan

@@ -49,6 +49,8 @@ type Plan struct {
 	editing bool
 	input   string
 	edited  map[int]bool
+
+	fold *planFold // nil for a plan without groups
 }
 
 // NewPlan opens the plan screen.
@@ -56,7 +58,7 @@ func NewPlan(c *Ctx, spec PlanSpec) *Plan {
 	if spec.Options.Toggles == nil {
 		spec.Options.Toggles = map[string]bool{}
 	}
-	return &Plan{c: c, spec: spec, edited: map[int]bool{}}
+	return &Plan{c: c, spec: spec, edited: map[int]bool{}, fold: newFold(spec.Plan)}
 }
 
 func (p *Plan) Title() string { return strings.ToLower(p.spec.Plan.Title) + " — plan" }
@@ -100,6 +102,9 @@ func (p *Plan) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if k != "enter" {
 		p.confirm = false
 	}
+	if p.fold != nil && p.foldKey(k) {
+		return p, nil
+	}
 	switch k {
 	case "up", "k":
 		p.cur = max(0, p.cur-1)
@@ -133,6 +138,7 @@ func (p *Plan) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			engine.Prepare(&plan)
 			p.spec.Plan = plan
 			p.cur = min(p.cur, len(plan.Steps)-1)
+			p.fold = newFold(plan)
 		}
 	case "enter":
 		if len(steps) == 0 {
@@ -156,74 +162,27 @@ func (p *Plan) irreversible() bool {
 	return false
 }
 
-// splitCommand splits a command line into words, honouring quotes.
-func splitCommand(s string) []string {
-	var (
-		out   []string
-		cur   strings.Builder
-		quote rune
-		has   bool
-	)
-	flush := func() {
-		if has {
-			out = append(out, cur.String())
-			cur.Reset()
-			has = false
-		}
-	}
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		r := rs[i]
-		switch {
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			} else if r == '\\' && quote == '"' && i+1 < len(rs) {
-				i++
-				cur.WriteRune(rs[i])
-			} else {
-				cur.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			quote, has = r, true
-		case r == '\\' && i+1 < len(rs):
-			i++
-			cur.WriteRune(rs[i])
-			has = true
-		case r == ' ' || r == '\t':
-			flush()
-		default:
-			cur.WriteRune(r)
-			has = true
-		}
-	}
-	flush()
-	return out
-}
-
-func tagColor(c *Ctx, s recipe.Step) color.Color {
-	t := c.Theme
-	switch s.Tag() {
-	case "IRREVERSIBLE":
-		return t.Danger
-	case "READ-ONLY":
-		return t.Muted
-	}
-	return t.Safe
-}
-
 func (p *Plan) Lines() []string {
+	if p.fold != nil && !p.fold.detail {
+		return p.foldLines()
+	}
 	c, t := p.c, p.c.Theme
 	w := c.W
 	plan := p.spec.Plan
 
 	sub := fmt.Sprintf("%s · ≈ %s · nothing has run yet",
 		humanize.Plural(len(plan.Steps), "step"), humanize.Duration(secs(plan.Seconds)))
+	title := "Here’s what will happen"
+	hints := []kit.Hint{{"e", "edit step"}, {"c", "copy as script"}, {"esc", "back"}}
+	if p.fold != nil {
+		title, sub = p.fold.where(plan, p.cur)
+		hints = []kit.Hint{{"tab", "next " + plan.Noun()}, {"e", "edit step"}, {"esc", "all " + plan.Noun() + "s"}}
+	}
 	top := []string{
 		header(c, p.spec.crumbs(c, "Plan"), nil),
 		kit.Blank(t, w),
 		kit.Row(w, t.Base(), []kit.Span{
-			kit.Sp(t.S(t.Strong).Bold(true), "Here’s what will happen"),
+			kit.Sp(t.S(t.Strong).Bold(true), title),
 			kit.Sp(t.S(t.Muted), "  "+sub),
 		}, nil),
 		kit.Blank(t, w),
@@ -232,40 +191,66 @@ func (p *Plan) Lines() []string {
 	visible := max(1, (c.H-len(top)-4)/4)
 	p.off = kit.Window(p.cur, p.off, len(plan.Steps), visible)
 	for i := p.off; i < len(plan.Steps) && i < p.off+visible; i++ {
-		s := plan.Steps[i]
-		cur := i == p.cur
-		st := func(fg color.Color) lipgloss.Style {
-			if cur {
-				return t.Soft(fg)
-			}
-			return t.S(fg)
-		}
-		tag := s.Tag()
-		if p.edited[i] {
-			tag = "EDITED · " + tag
-		}
-		cmd := "$ " + engine.Display(s, c.Home())
-		cmdStyle := st(t.Subtle)
-		if cur && p.editing {
-			cmd = "$ " + p.input + "▍"
-			cmdStyle = st(t.Strong)
-		}
-		top = append(top,
-			kit.Row(w, st(t.Text), []kit.Span{
-				kit.CellR(st(t.Faint), fmt.Sprint(i+1), 3), kit.Cell(st(t.Text), "", 2),
-				kit.Sp(st(t.Strong), s.Title),
-			}, []kit.Span{kit.Sp(st(tagColor(c, s)), tag+" ")}),
-			kit.Row(w, st(t.Text), []kit.Span{kit.Cell(st(t.Text), "", 5), kit.Sp(cmdStyle, kit.Fit(cmd, w-6))}, nil),
-			kit.Row(w, st(t.Text), []kit.Span{kit.Cell(st(t.Text), "", 5), kit.Sp(st(t.Muted), s.Why)}, nil),
-			kit.Blank(t, w))
+		top = append(top, p.stepRows(i)...)
 	}
 	if n := len(plan.Steps) - p.off - visible; n > 0 {
 		top[len(top)-1] = kit.Row(w, t.Base(), []kit.Span{
 			kit.Sp(t.S(t.Faint), fmt.Sprintf("     ↓ %s more", humanize.Plural(n, "step"))),
 		}, nil)
 	}
+	return kit.Frame(t, w, c.H, top, p.bottom(hints, p.action()))
+}
 
-	// What changes, and the switches.
+// stepRows draws one step: its title and tag, its command, why, and a gap.
+func (p *Plan) stepRows(i int) []string {
+	c, t := p.c, p.c.Theme
+	w := c.W
+	s := p.spec.Plan.Steps[i]
+	cur := i == p.cur
+	st := func(fg color.Color) lipgloss.Style {
+		if cur {
+			return t.Soft(fg)
+		}
+		return t.S(fg)
+	}
+	tag := s.Tag()
+	if p.edited[i] {
+		tag = "EDITED · " + tag
+	}
+	cmd := "$ " + engine.Display(s, c.Home())
+	cmdStyle := st(t.Subtle)
+	if cur && p.editing {
+		cmd = "$ " + p.input + "▍"
+		cmdStyle = st(t.Strong)
+	}
+	return []string{
+		kit.Row(w, st(t.Text), []kit.Span{
+			kit.CellR(st(t.Faint), fmt.Sprint(i+1), 3), kit.Cell(st(t.Text), "", 2),
+			kit.Sp(st(t.Strong), s.Title),
+		}, []kit.Span{kit.Sp(st(tagColor(c, s)), tag+" ")}),
+		kit.Row(w, st(t.Text), []kit.Span{kit.Cell(st(t.Text), "", 5), kit.Sp(cmdStyle, kit.Fit(cmd, w-6))}, nil),
+		kit.Row(w, st(t.Text), []kit.Span{kit.Cell(st(t.Text), "", 5), kit.Sp(st(t.Muted), s.Why)}, nil),
+		kit.Blank(t, w),
+	}
+}
+
+// action is what enter does, in words.
+func (p *Plan) action() string {
+	plan := p.spec.Plan
+	switch {
+	case plan.Reclaim > 0:
+		return "run and reclaim ≈ " + humanize.Bytes(plan.Reclaim)
+	case plan.ToTrash > 0:
+		return "run · move " + humanize.Bytes(plan.ToTrash) + " to the Trash"
+	}
+	return "run"
+}
+
+// bottom is what changes, the switches, and the keys.
+func (p *Plan) bottom(hints []kit.Hint, action string) []string {
+	c, t := p.c, p.c.Theme
+	w := c.W
+	plan := p.spec.Plan
 	muted := t.S(t.Muted)
 	var left []kit.Span
 	switch {
@@ -301,15 +286,6 @@ func (p *Plan) Lines() []string {
 	} else {
 		bottom = append(bottom, kit.Row(w, t.Base(), left, right))
 	}
-
-	hints := []kit.Hint{{"e", "edit step"}, {"c", "copy as script"}, {"esc", "back"}}
-	action := "run"
-	switch {
-	case plan.Reclaim > 0:
-		action = "run and reclaim ≈ " + humanize.Bytes(plan.Reclaim)
-	case plan.ToTrash > 0:
-		action = "run · move " + humanize.Bytes(plan.ToTrash) + " to the Trash"
-	}
 	var sum []kit.Span
 	switch {
 	case p.editing:
@@ -318,6 +294,5 @@ func (p *Plan) Lines() []string {
 	case p.confirm:
 		sum = []kit.Span{kit.Sp(t.S(t.Danger), "this cannot be undone — press enter again")}
 	}
-	bottom = append(bottom, kit.Blank(t, w), kit.Footer(t, w, hints, sum, "⏎", action))
-	return kit.Frame(t, w, c.H, top, bottom)
+	return append(bottom, kit.Blank(t, w), kit.Footer(t, w, hints, sum, "⏎", action))
 }

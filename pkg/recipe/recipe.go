@@ -9,6 +9,7 @@ package recipe
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -46,7 +47,17 @@ type Env struct {
 	Home string // home directory; tests and SPACE_HOME point it at a sandbox
 	Run  Runner
 	Now  func() time.Time
+	// Root is the folder space was opened on. Empty when there is none, or
+	// when a sandboxed run was pointed outside its sandbox: a recipe that
+	// works on the opened folder is then not detected.
+	Root string
+	// StateDir is where space keeps what it writes: ~/.local/state/space.
+	StateDir string
 }
+
+// ErrNothingHere is returned by Inspect when the recipe applies to this Mac
+// but found nothing to do in the opened folder. Such a recipe is not listed.
+var ErrNothingHere = errors.New("nothing here for this recipe")
 
 // Item is one removable thing found by Inspect.
 type Item struct {
@@ -88,6 +99,17 @@ type Step struct {
 	Safe       bool // irreversible in theory, harmless in practice
 	ReadOnly   bool
 	Sudo       bool
+
+	// Group names the unit this step belongs to, such as one repository.
+	// Steps that share a Group run in plan order, and a command that fails
+	// ends that group only. Groups that follow one another in Steps run side
+	// by side, Plan.Parallel at a time. Empty: the step runs on its own and
+	// its failure ends the run. A step in a group may not set Sudo. The name
+	// is one line and unique within the plan.
+	Group string
+	// Kind is the line this step folds into on the plan screen, the same for
+	// every group: "Delete branches\t118 in total". Empty: the Title.
+	Kind string
 }
 
 // Tag is the label shown next to a step.
@@ -139,6 +161,22 @@ type Plan struct {
 	Metric   *Metric
 	Summary  []string // lines for the done screen: "images  14 → 8"
 	After    []Action
+
+	// Parallel is how many groups run at once; 0 or 1 means one at a time.
+	Parallel int
+	// GroupNoun is what one group is called: "repo". Empty: "group".
+	GroupNoun string
+	// Notes are lines under a folded plan, as "label\tvalue":
+	// "skipped\tlegacy-billing — uncommitted changes".
+	Notes []string
+}
+
+// Noun is what one group of the plan is called.
+func (p Plan) Noun() string {
+	if p.GroupNoun != "" {
+		return p.GroupNoun
+	}
+	return "group"
 }
 
 // Options carries the user's choices into Plan.

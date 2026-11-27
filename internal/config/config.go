@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -59,6 +60,16 @@ func Resolve() (Paths, error) {
 // Sandboxed reports whether SPACE_HOME is in effect.
 func Sandboxed() bool { return os.Getenv("SPACE_HOME") != "" }
 
+// RecipeRoot is the opened folder as recipes may see it. A sandboxed run
+// that was pointed outside its sandbox gets none: a recipe that works on
+// the opened folder must not wander into real data.
+func (p Paths) RecipeRoot(dir string) string {
+	if Sandboxed() && dir != p.Home && !strings.HasPrefix(dir, p.Home+string(filepath.Separator)) {
+		return ""
+	}
+	return dir
+}
+
 // LogFile is today's log: ~/.local/state/space/2026-11-22.log.
 func (p Paths) LogFile(now time.Time) string {
 	return filepath.Join(p.StateDir, now.Format("2006-01-02")+".log")
@@ -91,6 +102,7 @@ type State struct {
 	KeepDays int                 `json:"keep_days,omitempty"` // AI agents keep window
 	Pinned   map[string][]string `json:"pinned,omitempty"`    // recipe id → pinned projects
 	Hidden   []string            `json:"hidden,omitempty"`    // recipes hidden with x
+	GitKeep  []string            `json:"git_keep,omitempty"`  // Git: branch names that stay
 
 	path string
 }

@@ -1,0 +1,29 @@
+space  Recipes › Git · ~/work › Plan
+
+ml-experiments  repo 1 of 6 · step 2 of 4
+
+  1  Create the backup folder                                                                                    SAFE
+     $ mkdir -p ~/.local/state/space/git
+     Bundles of deleted branches are kept there for 30 days.
+
+  2  Back up 2 branches                                                                                          SAFE
+     $ git -C ~/work/ml-experiments bundle create ~/.local/state/space/git/ml-experiments.bundle fix/login exp/webgl…
+     Brings a deleted branch back with git fetch.
+
+  3  Delete 5 branches                                                                                     REVERSIBLE
+     $ git -C ~/work/ml-experiments branch -D fix/login feat/old exp/webgl a b
+     Merged, gone on origin, or pushed. Undo from the bundle.
+
+  4  Forget old history                                                                                  IRREVERSIBLE
+     $ git -C ~/work/ml-experiments -c gc.reflogExpireUnreachable=now reflog expire --all
+     After this the deleted commits can only come back from the bundle.
+
+  5  Compact                                                                                                     SAFE
+     $ git -C ~/work/ml-experiments gc --prune=now
+     Repacks what is left and drops what nothing points to.
+     ↓ 21 steps more
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+frees   ≈ 6.4 GB                                                                                    1 [✓] compact .git
+
+tab next repo  e edit step  esc all repos                                                 ▏⏎▕ run and reclaim ≈ 6.4 GB

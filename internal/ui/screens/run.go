@@ -46,6 +46,8 @@ type Run struct {
 	stopping     bool
 	cancel       context.CancelFunc
 	ticks        int
+
+	groups *groupRun // nil for a plan without groups
 }
 
 // runCmd starts the engine and switches to the run screen.
@@ -57,6 +59,7 @@ func runCmd(c *Ctx, spec PlanSpec) tea.Cmd {
 		status:  make([]int, len(spec.Plan.Steps)),
 		results: make([]engine.StepResult, len(spec.Plan.Steps)),
 		start:   time.Now(),
+		groups:  newGroupRun(spec.Plan),
 	}
 	if spec.Measure != nil {
 		if label, n, ok := spec.Measure(context.Background()); ok {
@@ -122,6 +125,9 @@ func (r *Run) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			}
 		}
 	case runEventMsg:
+		if r.groups != nil {
+			r.groups.feed(msg.ev)
+		}
 		switch ev := msg.ev.(type) {
 		case engine.StepStarted:
 			r.cur = ev.Index
@@ -148,14 +154,21 @@ func (r *Run) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return r, r.wait()
 	case tea.KeyPressMsg:
-		if keyOf(msg) == "l" {
+		k := keyOf(msg)
+		if k == "l" {
 			return r, openLog(r.eng.LogPath)
+		}
+		if r.groups != nil {
+			r.groups.key(k)
 		}
 	}
 	return r, nil
 }
 
 func (r *Run) Lines() []string {
+	if r.groups != nil {
+		return r.groupLines()
+	}
 	c, t := r.c, r.c.Theme
 	w := c.W
 	steps := r.spec.Plan.Steps
@@ -238,6 +251,18 @@ func (r *Run) Lines() []string {
 		top = append(top, kit.Box(t, w, lines)...)
 	}
 
+	stop := "stop after this step"
+	if r.stopping {
+		stop = "stopping after this step… again to cut it short"
+	}
+	return kit.Frame(t, w, c.H, top, r.bottom([]kit.Hint{{"l", "full log"}, {"ctrl+c", stop}}))
+}
+
+// bottom is the recipe's own number while it changes, and the keys.
+func (r *Run) bottom(hints []kit.Hint) []string {
+	c, t := r.c, r.c.Theme
+	w := c.W
+	muted := t.S(t.Muted)
 	bottom := []string{kit.Rule(t, w)}
 	if r.metricLabel != "" {
 		spans := []kit.Span{
@@ -251,12 +276,6 @@ func (r *Run) Lines() []string {
 	} else {
 		bottom = append(bottom, kit.Blank(t, w))
 	}
-	stop := "stop after this step"
-	if r.stopping {
-		stop = "stopping after this step… again to cut it short"
-	}
-	bottom = append(bottom, kit.Blank(t, w), kit.Footer(t, w,
-		[]kit.Hint{{"l", "full log"}, {"ctrl+c", stop}},
+	return append(bottom, kit.Blank(t, w), kit.Footer(t, w, hints,
 		[]kit.Span{kit.Sp(muted, "log: "+c.Tilde(r.eng.LogPath))}, "", ""))
-	return kit.Frame(t, w, c.H, top, bottom)
 }

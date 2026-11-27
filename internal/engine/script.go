@@ -73,26 +73,54 @@ func Display(s recipe.Step, home string) string {
 // Script renders a plan as a shell script that does the same thing.
 func Script(p recipe.Plan, now time.Time) string {
 	var b strings.Builder
+	groups := len(Groups(p))
+	what := humanize.Plural(len(p.Steps), "step")
+	if groups > 0 {
+		what += " in " + humanize.Plural(groups, p.Noun())
+	}
 	b.WriteString("#!/bin/sh\n")
-	fmt.Fprintf(&b, "# space plan: %s — %s\n", p.Title, humanize.Plural(len(p.Steps), "step"))
+	fmt.Fprintf(&b, "# space plan: %s — %s\n", oneLine(p.Title), what)
 	fmt.Fprintf(&b, "# Generated on %s. Read it before you run it.\n", now.Format("2006-01-02"))
+	if groups > 0 {
+		scriptGroupsNote(&b, p)
+	}
 	b.WriteString("set -eu\n")
-	for i, s := range p.Steps {
-		fmt.Fprintf(&b, "\n# %d. %s — %s\n", i+1, s.Title, s.Tag())
-		if s.Why != "" {
-			fmt.Fprintf(&b, "#    %s\n", s.Why)
-		}
-		argv := Argv(s)
-		if s.Remove == nil || len(s.Remove.Paths) <= 1 {
-			b.WriteString(quoteAll(argv, "") + "\n")
+	if groups > 0 {
+		b.WriteString("failed=\n")
+	}
+	for _, st := range Layout(p) {
+		if len(st.Groups) == 0 {
+			b.WriteString("\n")
+			scriptStep(&b, p, st.Step, "", "")
 			continue
 		}
-		head := len(argv) - len(s.Remove.Paths)
-		b.WriteString(quoteAll(argv[:head], ""))
-		for _, path := range s.Remove.Paths {
-			b.WriteString(" \\\n  " + Quote(path))
+		for _, g := range st.Groups {
+			scriptGroup(&b, p, g)
 		}
-		b.WriteString("\n")
+	}
+	if groups > 0 {
+		scriptGroupsEnd(&b)
 	}
 	return b.String()
+}
+
+// scriptStep writes one step: what it is, why, and its command. indent goes
+// in front of every line, and tail after the command (" &&" inside a group).
+func scriptStep(b *strings.Builder, p recipe.Plan, i int, indent, tail string) {
+	s := p.Steps[i]
+	fmt.Fprintf(b, "%s# %d. %s — %s\n", indent, i+1, oneLine(s.Title), s.Tag())
+	if s.Why != "" {
+		fmt.Fprintf(b, "%s#    %s\n", indent, oneLine(s.Why))
+	}
+	argv := Argv(s)
+	if s.Remove == nil || len(s.Remove.Paths) <= 1 {
+		b.WriteString(indent + quoteAll(argv, "") + tail + "\n")
+		return
+	}
+	head := len(argv) - len(s.Remove.Paths)
+	b.WriteString(indent + quoteAll(argv[:head], ""))
+	for _, path := range s.Remove.Paths {
+		b.WriteString(" \\\n" + indent + "  " + Quote(path))
+	}
+	b.WriteString(tail + "\n")
 }

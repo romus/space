@@ -22,6 +22,7 @@ import (
 	"github.com/romus/space/internal/engine"
 	"github.com/romus/space/internal/humanize"
 	"github.com/romus/space/internal/recipes/agents"
+	"github.com/romus/space/internal/recipes/git"
 	_ "github.com/romus/space/internal/recipes/podman" // registers the recipe
 	"github.com/romus/space/internal/ui"
 	"github.com/romus/space/internal/ui/screens"
@@ -50,7 +51,18 @@ func (a *app) load() error {
 		return fmt.Errorf("config.toml: %w", err)
 	}
 	a.paths, a.cfg, a.state = paths, cfg, config.LoadState(paths)
-	a.env = recipe.Env{Home: paths.Home, Run: engine.Reader{}, Now: time.Now}
+	a.env = recipe.Env{Home: paths.Home, Run: engine.Reader{}, Now: time.Now, StateDir: paths.StateDir}
+	return nil
+}
+
+// open tells the recipes which folder they work on: the --path flag, else
+// the folder space was started in.
+func (a *app) open(flag string) error {
+	dir, err := resolveRoot("", flag, a.paths)
+	if err != nil {
+		return err
+	}
+	a.env.Root = a.paths.RecipeRoot(dir)
 	return nil
 }
 
@@ -125,7 +137,7 @@ func Execute(build Build) int {
 		Short: "See what takes up your Mac's disk and clean it safely",
 		Long: "space shows folders and files by the room they take on disk, and removes them the right way:\n" +
 			"files and caches go to the Trash unless you ask to delete them, and things that cannot simply be deleted —\n" +
-			"a Podman machine, Claude Code or Codex sessions — get a recipe with the right order of commands.\n\n" +
+			"a Podman machine, Git branches, Claude Code or Codex sessions — get a recipe with the right order of commands.\n\n" +
 			"Nothing runs without a plan, and the plan is exactly what will run.\n\n" +
 			"space opens the folder you start it in. Give a path to open another one:\n" +
 			"  space ~/Downloads\n" +
@@ -224,6 +236,9 @@ type planOpts struct {
 // build inspects a recipe and plans its default selection.
 func (a *app) planFor(ctx context.Context, r recipe.Recipe, o planOpts) (recipe.Plan, []recipe.Item, error) {
 	items, err := r.Inspect(ctx)
+	if errors.Is(err, recipe.ErrNothingHere) {
+		return recipe.Plan{}, nil, fmt.Errorf("nothing for %s under %s", r.Info().Name, humanize.Tilde(a.env.Root, a.paths.Home))
+	}
 	if err != nil {
 		return recipe.Plan{}, nil, err
 	}
@@ -239,6 +254,15 @@ func (a *app) planFor(ctx context.Context, r recipe.Recipe, o planOpts) (recipe.
 	if _, ok := r.(agents.Source); ok {
 		sel = agents.Select(items, keep, opt.Pinned, nil, a.env.Now())
 	}
+	if r.ID() == git.ID {
+		// The user's own rule for the branches that stay. The command line
+		// never asks origin, so stale origin refs are not in the plan.
+		rule := a.state.GitKeep
+		if len(rule) == 0 {
+			rule = git.DefaultKeep
+		}
+		sel = git.Select(items, rule, nil)
+	}
 	plan, err := r.Plan(sel, opt)
 	if err != nil {
 		return recipe.Plan{}, items, err
@@ -251,6 +275,7 @@ func (a *app) recipeCmd() *cobra.Command {
 	var (
 		dryRun, yes bool
 		o           planOpts
+		pathFlag    string
 	)
 	cmd := &cobra.Command{
 		Use:   "recipe [id]",
@@ -262,6 +287,9 @@ func (a *app) recipeCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
+				return err
+			}
+			if err := a.open(pathFlag); err != nil {
 				return err
 			}
 			ctx := cmd.Context()
@@ -286,7 +314,7 @@ func (a *app) recipeCmd() *cobra.Command {
 				if !term.IsTerminal(os.Stdin.Fd()) {
 					return errors.New("refusing to run without confirmation: pass --yes, or --dry-run to only look")
 				}
-				fmt.Fprintf(out, "\nRun %s? [y/N] ", humanize.Plural(len(plan.Steps), "step"))
+				fmt.Fprintf(out, "\n%s [y/N] ", runQuestion(plan))
 				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
 					fmt.Fprintln(out, "Nothing was changed.")
@@ -296,6 +324,7 @@ func (a *app) recipeCmd() *cobra.Command {
 			return a.run(ctx, out, r, plan)
 		},
 	}
+	cmd.Flags().StringVarP(&pathFlag, "path", "p", "", "folder the recipes work on (default: the current folder)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show the plan and change nothing")
 	cmd.Flags().BoolVar(&yes, "yes", false, "run without asking")
 	cmd.Flags().IntVar(&o.keepDays, "keep-days", 0, "AI agents: keep sessions used in the last N days (default 30)")
@@ -312,6 +341,9 @@ func (a *app) listRecipes(ctx context.Context, out io.Writer) error {
 	for _, r := range list {
 		info := r.Info()
 		items, err := r.Inspect(ctx)
+		if errors.Is(err, recipe.ErrNothingHere) {
+			continue
+		}
 		found := r.Summary(items)
 		if err != nil {
 			found = "error: " + err.Error()
@@ -323,79 +355,11 @@ func (a *app) listRecipes(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-func printPlan(out io.Writer, p recipe.Plan, home string) {
-	fmt.Fprintf(out, "%s — %s · ≈ %s · nothing has run yet\n", p.Title,
-		humanize.Plural(len(p.Steps), "step"), humanize.Duration(time.Duration(p.Seconds)*time.Second))
-	for i, s := range p.Steps {
-		fmt.Fprintf(out, "\n%2d  %-58s %s\n", i+1, s.Title, s.Tag())
-		fmt.Fprintf(out, "    $ %s\n", engine.Display(s, home))
-		if s.Why != "" {
-			fmt.Fprintf(out, "    %s\n", s.Why)
-		}
-	}
-	switch {
-	case p.Metric != nil:
-		fmt.Fprintf(out, "\n%s: %s → ≈ %s\n", p.Metric.Label, humanize.Bytes(p.Metric.Before), humanize.Bytes(p.Metric.After))
-	case p.Reclaim > 0 || p.ToTrash > 0:
-		fmt.Fprintf(out, "\nFrees ≈ %s, moves %s to the Trash.\n", humanize.Bytes(p.Reclaim), humanize.Bytes(p.ToTrash))
-	}
-}
-
-// run executes a plan with plain text progress.
-func (a *app) run(ctx context.Context, out io.Writer, r recipe.Recipe, plan recipe.Plan) error {
-	eng := &engine.Engine{Home: a.paths.Home, Volume: a.paths.Home, LogPath: a.paths.LogFile(a.env.Now())}
-	if m, ok := r.(recipe.Measurer); ok {
-		eng.Measure = m.Measure
-	}
-	fmt.Fprintln(out)
-	res := eng.Run(ctx, plan, func(ev engine.Event) {
-		switch ev := ev.(type) {
-		case engine.StepStarted:
-			fmt.Fprintf(out, "→ %d/%d %s\n", ev.Index+1, len(plan.Steps), plan.Steps[ev.Index].Title)
-		case engine.StepOutput:
-			fmt.Fprintf(out, "    %s\n", ev.Line)
-		case engine.StepFinished:
-			if ev.Result.Err != nil {
-				fmt.Fprintf(out, "  ✗ %v\n", ev.Result.Err)
-			} else {
-				fmt.Fprintf(out, "  ✓ %s\n", humanize.Duration(ev.Result.Elapsed))
-			}
-		}
-	})
-	fmt.Fprintln(out)
-	if res.Metric != nil {
-		fmt.Fprintf(out, "%s: %s → %s\n", res.Metric.Label, humanize.Bytes(res.Metric.Before), humanize.Bytes(res.Metric.After))
-	}
-	fmt.Fprintf(out, "Free space: %s → %s (reclaimed %s)\n", humanize.Bytes(res.FreeBefore),
-		humanize.Bytes(res.FreeAfter), humanize.Bytes(res.Reclaimed()))
-	if res.Trashed > 0 {
-		fmt.Fprintf(out, "%s moved to the Trash: space comes back when you empty it.\n", humanize.Bytes(res.Trashed))
-	}
-	failures := res.Failures()
-	if n := len(failures); n > 0 {
-		noun := "items"
-		if n == 1 {
-			noun = "item"
-		}
-		fmt.Fprintf(out, "%d %s could not be removed:\n", n, noun)
-		for _, f := range failures {
-			fmt.Fprintf(out, "  %s — %s\n", humanize.Tilde(f.Path, a.paths.Home), f.Reason)
-		}
-	}
-	fmt.Fprintf(out, "Log: %s\n", humanize.Tilde(res.LogPath, a.paths.Home))
-	if res.Failed >= 0 {
-		return fmt.Errorf("step %d failed: %w", res.Failed+1, res.Err)
-	}
-	if len(failures) > 0 {
-		return errors.New("some items could not be removed")
-	}
-	return nil
-}
-
 func (a *app) planCmd() *cobra.Command {
 	var (
-		script bool
-		o      planOpts
+		script   bool
+		o        planOpts
+		pathFlag string
 	)
 	cmd := &cobra.Command{
 		Use:   "plan [recipe...]",
@@ -405,6 +369,9 @@ func (a *app) planCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
+				return err
+			}
+			if err := a.open(pathFlag); err != nil {
 				return err
 			}
 			ctx := cmd.Context()
@@ -452,6 +419,7 @@ func (a *app) planCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&pathFlag, "path", "p", "", "folder the recipes work on (default: the current folder)")
 	cmd.Flags().BoolVar(&script, "script", false, "print a shell script instead of a description")
 	cmd.Flags().IntVar(&o.keepDays, "keep-days", 0, "AI agents: keep sessions used in the last N days (default 30)")
 	cmd.Flags().BoolVar(&o.permanent, "permanent", false, "delete for good instead of moving to the Trash")

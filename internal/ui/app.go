@@ -62,7 +62,8 @@ func New(opt Options) *App {
 		State: opt.State,
 		Root:  opt.Root,
 		Mode:  opt.Mode,
-		Env:   recipe.Env{Home: opt.Paths.Home, Run: engine.Reader{}, Now: time.Now},
+		Env: recipe.Env{Home: opt.Paths.Home, Run: engine.Reader{}, Now: time.Now,
+			Root: opt.Paths.RecipeRoot(opt.Root), StateDir: opt.Paths.StateDir},
 	}
 	a.applyTheme()
 	a.overview, a.init = screens.NewOverview(a.c, opt.Tab)

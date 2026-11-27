@@ -1,0 +1,29 @@
+space  Recipes › ◆ Git › web                                                      .git 2 MB · origin github.com/me/web
+
+ Local 11  Remote-tracking 2 stale  Worktrees 1                                      sorted by what’s safest to remove
+─━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    BRANCH                                                            WHY                                 LAST COMMIT
+ ○  develop                                                           kept · rule                               today
+ ○  hotfix                                                            kept · in worktree web-hotfix             today
+ ○  main                                                              kept · default                            today
+[✓] dependabot/npm/*  × 4                                             merged into main                    3 mo – 7 mo
+[✓] fix/login                                                         merged into main                           3 mo
+[✓] exp/webgl                                                         gone on origin                             3 mo
+[✓] release/1                                                         pushed to origin                           1 yr
+[ ] wip/pricing                                                       only here · 2 commits                      3 mo
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+only here — commits that exist on no remote. Never preselected; mark them yourself if you’re sure.
+Branches that are not merged are saved to a bundle first, so you can bring them back.
+
+␣ mark  m merged only  → open group  tab next tab  esc all repos                       7 branches · ≈ 780 MB  ▏⏎▕ plan

@@ -1,0 +1,29 @@
+space  Recipes › Git · ~/work › Plan
+
+Up to 5 steps in each of 6 repos  4 at a time · ≈ 3 m 0 s · nothing has run yet
+
+  1  Create the backup folder                                                                                    SAFE
+     $ mkdir -p ~/.local/state/space/git
+
+  2  Back up branches  one file per repo, kept 30 days                                                           SAFE
+     $ git -C ~/work/ml-experiments bundle create ~/.local/state/space/git/ml-experiments.bundle fix/login exp/webgl…
+
+  3  Delete branches  30 in total                                                                          REVERSIBLE
+     $ git -C ~/work/ml-experiments branch -D fix/login feat/old exp/webgl a b
+
+  4  Forget old history  reflog keeps deleted commits alive                                              IRREVERSIBLE
+     $ git -C ~/work/ml-experiments -c gc.reflogExpireUnreachable=now reflog expire --all
+     After this the deleted commits can only come back from the bundle.
+  5  Compact  this is where space comes back                                                                     SAFE
+     $ git -C ~/work/ml-experiments gc --prune=now
+     ↓ 1 more
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ in         ml-experiments · indexer · web · api · infra-terraform · docs                                           │
+│ skipped    legacy-billing — uncommitted changes · sandbox — detached HEAD                                          │
+│ untouched  branches on GitHub · stashes · tags · working files                                                     │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+frees   ≈ 6.4 GB                                                                                    1 [✓] compact .git
+
+→ per-repo detail  c copy as script  esc back                                            ▏⏎▕ run in 6 repos · ≈ 6.4 GB

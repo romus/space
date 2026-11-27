@@ -27,6 +27,9 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Test for data races
+        run: make race
+
       - name: Build
         run: make build
 
